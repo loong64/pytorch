@@ -126,7 +126,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ inputs.app_version }}-${{ github.run_id }}
+          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ needs.check.outputs.version }}-${{ github.run_id }}
 
       - name: Upload wheels
         run: |
@@ -140,6 +140,6 @@ jobs:
 
       - name: Upload release
         run:
-          gh release upload ${{ inputs.app_version }} -R ${{ github.repository }} wheelhouse/*.whl --clobber
+          gh release upload ${{ needs.check.outputs.version }} -R ${{ github.repository }} wheelhouse/*.whl --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

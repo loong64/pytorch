@@ -9,7 +9,7 @@ on:
         default: ''
 
 jobs:
-  build:
+  custom:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
