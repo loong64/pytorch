@@ -1,0 +1,2721 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bd9f77f..00df890 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -95,7 +95,7 @@ IF(NOT CMAKE_SYSTEM_PROCESSOR)
+       "cpuinfo will compile, but cpuinfo_initialize() will always fail.")
+     SET(CPUINFO_SUPPORTED_PLATFORM FALSE)
+   ENDIF()
+-ELSEIF(NOT CPUINFO_TARGET_PROCESSOR MATCHES "^(i[3-6]86|AMD64|x86(_64)?|armv[5-8].*|aarch64|arm64.*|ARM64.*|riscv(32|64))$")
++ELSEIF(NOT CPUINFO_TARGET_PROCESSOR MATCHES "^(i[3-6]86|AMD64|x86(_64)?|armv[5-8].*|aarch64|arm64.*|ARM64.*|riscv(32|64)|loongarch64)$")
+   MESSAGE(WARNING
+     "Target processor architecture \"${CPUINFO_TARGET_PROCESSOR}\" is not supported in cpuinfo. "
+     "cpuinfo will compile, but cpuinfo_initialize() will always fail.")
+@@ -224,6 +224,20 @@ IF(CPUINFO_SUPPORTED_PLATFORM)
+ 	src/riscv/linux/riscv-hw.c
+ 	src/riscv/linux/riscv-isa.c)
+     ENDIF()
++  ELSEIF(CPUINFO_TARGET_PROCESSOR MATCHES "^(loongarch64)$")
++    LIST(APPEND CPUINFO_SRCS
++      src/loongarch/uarch.c
++      src/loongarch/cache.c)
++    IF(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++      LIST(APPEND CPUINFO_SRCS
++        src/loongarch/linux/init.c
++        src/loongarch/linux/cpuinfo.c
++        src/loongarch/linux/clusters.c
++        src/loongarch/linux/chipset.c
++        src/loongarch/linux/cpucfg.c
++        src/loongarch/linux/hwcap.c
++        src/loongarch/linux/loongarch64-isa.c)
++    ENDIF()
+   ENDIF()
+ 
+   IF(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+diff --git a/configure.py b/configure.py
+index 00bba24..67762d6 100755
+--- a/configure.py
++++ b/configure.py
+@@ -63,6 +63,19 @@ def main(args):
+                     "riscv/linux/riscv-isa.c",
+                 ]
+ 
++        if build.target.is_loongarch64:
++            sources += ["loongarch/uarch.c", "loongarch/cache.c"]
++            if build.target.is_linux:
++                sources += [
++                    "loongarch/linux/init.c",
++                    "loongarch/linux/cpuinfo.c",
++                    "loongarch/linux/clusters.c",
++                    "loongarch/linux/cpucfg.c",
++                    "loongarch/linux/chipset.c",
++                    "loongarch/linux/hwcap.c",
++                    "loongarch/linux/loongarch64-isa.c",
++                ]
++
+         if build.target.is_macos:
+             sources += ["mach/topology.c"]
+         if build.target.is_linux or build.target.is_android:
+diff --git a/include/cpuinfo-mock.h b/include/cpuinfo-mock.h
+index 7bb6d1e..cfba105 100644
+--- a/include/cpuinfo-mock.h
++++ b/include/cpuinfo-mock.h
+@@ -62,6 +62,9 @@ void CPUINFO_ABI cpuinfo_set_hwcap(uint32_t hwcap);
+ #if CPUINFO_ARCH_ARM
+ void CPUINFO_ABI cpuinfo_set_hwcap2(uint64_t hwcap2);
+ #endif
++#if CPUINFO_ARCH_LOONGARCH64
++void CPUINFO_ABI cpuinfo_set_hwcap(uint32_t hwcap);
++#endif
+ #endif
+ 
+ #if defined(__ANDROID__)
+diff --git a/include/cpuinfo.h b/include/cpuinfo.h
+index 387611c..dbdb029 100644
+--- a/include/cpuinfo.h
++++ b/include/cpuinfo.h
+@@ -54,6 +54,10 @@
+ #endif
+ #endif
+ 
++#if defined(__loongarch64)
++#define CPUINFO_ARCH_LOONGARCH64 1
++#endif
++
+ /* Define other architecture-specific macros as 0 */
+ 
+ #ifndef CPUINFO_ARCH_X86
+@@ -96,6 +100,10 @@
+ #define CPUINFO_ARCH_RISCV64 0
+ #endif
+ 
++#ifndef CPUINFO_ARCH_LOONGARCH64
++#define CPUINFO_ARCH_LOONGARCH64 0
++#endif
++
+ #if CPUINFO_ARCH_X86 && defined(_MSC_VER)
+ #define CPUINFO_ABI __cdecl
+ #elif CPUINFO_ARCH_X86 && defined(__GNUC__)
+@@ -304,6 +312,10 @@ enum cpuinfo_vendor {
+ 	 * in 1997.
+ 	 */
+ 	cpuinfo_vendor_dec = 57,
++	/**
++	 * Loongson. Vendor of LOONGARCH processor microarchitecture.
++	 */
++	cpuinfo_vendor_loongson = 58,
+ };
+ 
+ /**
+@@ -599,6 +611,9 @@ enum cpuinfo_uarch {
+ 
+ 	/** HiSilicon TaiShan v110 (Huawei Kunpeng 920 series processors). */
+ 	cpuinfo_uarch_taishan_v110 = 0x00C00100,
++
++	/** Loongson LA4 64 (Loongarch3 series processors). */
++	cpuinfo_uarch_LA464 = 0x00D00100,
+ };
+ 
+ struct cpuinfo_processor {
+@@ -633,6 +648,10 @@ struct cpuinfo_processor {
+ #if CPUINFO_ARCH_X86 || CPUINFO_ARCH_X86_64
+ 	/** APIC ID (unique x86-specific ID of the logical processor) */
+ 	uint32_t apic_id;
++#endif
++#if CPUINFO_ARCH_LOONGARCH64
++	/** CPUCFG ID (unique loongarch-specific ID of the logical processor) */
++	uint32_t cpucfg_id;
+ #endif
+ 	struct {
+ 		/** Level 1 instruction cache */
+@@ -669,6 +688,9 @@ struct cpuinfo_core {
+ #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
+ 	/** Value of Main ID Register (MIDR) for this core */
+ 	uint32_t midr;
++#elif CPUINFO_ARCH_LOONGARCH64
++	/** Value of CPUCFG for this core */
++	uint32_t cpucfg;
+ #endif
+ 	/** Clock rate (non-Turbo) of the core, in Hz */
+ 	uint64_t frequency;
+@@ -697,6 +719,9 @@ struct cpuinfo_cluster {
+ #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
+ 	/** Value of Main ID Register (MIDR) of the cores in the cluster */
+ 	uint32_t midr;
++#elif CPUINFO_ARCH_LOONGARCH64
++	/** Value of CPUCFG for this cores in the cluster */
++	uint32_t cpucfg;
+ #endif
+ 	/** Clock rate (non-Turbo) of the cores in the cluster, in Hz */
+ 	uint64_t frequency;
+@@ -730,6 +755,9 @@ struct cpuinfo_uarch_info {
+ #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
+ 	/** Value of Main ID Register (MIDR) for the microarchitecture */
+ 	uint32_t midr;
++#elif CPUINFO_ARCH_LOONGARCH64
++	/** Value of CPUCFG for the microarchitecture */
++	uint32_t cpucfg;
+ #endif
+ 	/** Number of logical processors with the microarchitecture */
+ 	uint32_t processor_count;
+@@ -2216,6 +2244,132 @@ static inline bool cpuinfo_has_riscv_v(void) {
+ #endif
+ }
+ 
++#if CPUINFO_ARCH_LOONGARCH64
++/* This structure is not a part of stable API. Use cpuinfo_has_loongarch_* functions instead. */
++struct cpuinfo_loongarch_isa {
++	bool cpucfg;
++	bool lam;
++	bool ual;
++	bool fpu;
++	bool lsx;
++	bool lasx;
++
++	bool crc32;
++	bool complex;
++	bool crypto;
++	bool lvz;
++	bool lbt_x86;
++	bool lbt_arm;
++	bool lbt_mips;
++};
++
++extern struct cpuinfo_loongarch_isa cpuinfo_isa;
++#endif
++
++static inline bool cpuinfo_has_loongarch_cpucfg(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.cpucfg;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lam(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.lam;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_ual(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.ual;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_fpu(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++		return cpuinfo_isa.fpu;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lsx(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++		return cpuinfo_isa.lsx;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lasx(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++		return cpuinfo_isa.lasx;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_crc32(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.crc32;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_complex(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.complex;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_crypto(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.crypto;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lvz(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.lvz;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lbt_x86(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.lbt_x86;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lbt_arm(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.lbt_arm;
++#else
++	return false;
++#endif
++}
++
++static inline bool cpuinfo_has_loongarch_lbt_mips(void) {
++#if CPUINFO_ARCH_LOONGARCH64
++	return cpuinfo_isa.lbt_mips;
++#else
++	return false;
++#endif
++}
++
+ const struct cpuinfo_processor* CPUINFO_ABI cpuinfo_get_processors(void);
+ const struct cpuinfo_core* CPUINFO_ABI cpuinfo_get_cores(void);
+ const struct cpuinfo_cluster* CPUINFO_ABI cpuinfo_get_clusters(void);
+diff --git a/src/api.c b/src/api.c
+index b8c999f..ec60d9a 100644
+--- a/src/api.c
++++ b/src/api.c
+@@ -30,7 +30,7 @@ uint32_t cpuinfo_packages_count = 0;
+ uint32_t cpuinfo_cache_count[cpuinfo_cache_level_max] = {0};
+ uint32_t cpuinfo_max_cache_size = 0;
+ 
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ struct cpuinfo_uarch_info* cpuinfo_uarchs = NULL;
+ uint32_t cpuinfo_uarchs_count = 0;
+ #else
+@@ -41,7 +41,7 @@ struct cpuinfo_uarch_info cpuinfo_global_uarch = {cpuinfo_uarch_unknown};
+ uint32_t cpuinfo_linux_cpu_max = 0;
+ const struct cpuinfo_processor** cpuinfo_linux_cpu_to_processor_map = NULL;
+ const struct cpuinfo_core** cpuinfo_linux_cpu_to_core_map = NULL;
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ const uint32_t* cpuinfo_linux_cpu_to_uarch_index_map = NULL;
+ #endif
+ #endif
+@@ -78,7 +78,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarchs() {
+ 	if (!cpuinfo_is_initialized) {
+ 		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarchs");
+ 	}
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ 	return cpuinfo_uarchs;
+ #else
+ 	return &cpuinfo_global_uarch;
+@@ -129,7 +129,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarch(uint32_t index) {
+ 	if (!cpuinfo_is_initialized) {
+ 		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarch");
+ 	}
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ 	if CPUINFO_UNLIKELY (index >= cpuinfo_uarchs_count) {
+ 		return NULL;
+ 	}
+@@ -174,7 +174,7 @@ uint32_t cpuinfo_get_uarchs_count(void) {
+ 	if (!cpuinfo_is_initialized) {
+ 		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarchs_count");
+ 	}
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ 	return cpuinfo_uarchs_count;
+ #else
+ 	return 1;
+diff --git a/src/cpuinfo/internal-api.h b/src/cpuinfo/internal-api.h
+index d84b26a..3273cd8 100644
+--- a/src/cpuinfo/internal-api.h
++++ b/src/cpuinfo/internal-api.h
+@@ -34,7 +34,7 @@ extern CPUINFO_INTERNAL uint32_t cpuinfo_packages_count;
+ extern CPUINFO_INTERNAL uint32_t cpuinfo_cache_count[cpuinfo_cache_level_max];
+ extern CPUINFO_INTERNAL uint32_t cpuinfo_max_cache_size;
+ 
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_RISCV32 || CPUINFO_ARCH_RISCV64 || CPUINFO_ARCH_LOONGARCH64
+ extern CPUINFO_INTERNAL struct cpuinfo_uarch_info* cpuinfo_uarchs;
+ extern CPUINFO_INTERNAL uint32_t cpuinfo_uarchs_count;
+ #else
+@@ -61,6 +61,7 @@ CPUINFO_PRIVATE void cpuinfo_arm_mach_init(void);
+ CPUINFO_PRIVATE void cpuinfo_arm_linux_init(void);
+ CPUINFO_PRIVATE void cpuinfo_riscv_linux_init(void);
+ CPUINFO_PRIVATE void cpuinfo_emscripten_init(void);
++CPUINFO_PRIVATE void cpuinfo_loongarch_linux_init(void);
+ 
+ CPUINFO_PRIVATE uint32_t cpuinfo_compute_max_cache_size(const struct cpuinfo_processor* processor);
+ 
+diff --git a/src/init.c b/src/init.c
+index 81d5721..c9e068b 100644
+--- a/src/init.c
++++ b/src/init.c
+@@ -58,6 +58,12 @@ bool CPUINFO_ABI cpuinfo_initialize(void) {
+ 	}
+ 	init_guard = true;
+ #endif
++#elif CPUINFO_ARCH_LOONGARCH64
++#if defined(__linux__)
++	pthread_once(&init_guard, &cpuinfo_loongarch_linux_init);
++#else
++	cpuinfo_log_error("loongarch operating system is not supported in cpuinfo");
++#endif
+ #else
+ 	cpuinfo_log_error("processor architecture is not supported in cpuinfo");
+ #endif
+diff --git a/src/linux/processors.c b/src/linux/processors.c
+index b68cd1c..f33fff9 100644
+--- a/src/linux/processors.c
++++ b/src/linux/processors.c
+@@ -293,7 +293,7 @@ uint32_t cpuinfo_linux_get_max_possible_processor(uint32_t max_processors_count)
+ 	uint32_t max_possible_processor = 0;
+ 	if (!cpuinfo_linux_parse_cpulist(
+ 		    POSSIBLE_CPULIST_FILENAME, max_processor_number_parser, &max_possible_processor)) {
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_LOONGARCH64
+ 		cpuinfo_log_error("failed to parse the list of possible processors in %s", POSSIBLE_CPULIST_FILENAME);
+ #else
+ 		cpuinfo_log_warning("failed to parse the list of possible processors in %s", POSSIBLE_CPULIST_FILENAME);
+@@ -315,7 +315,7 @@ uint32_t cpuinfo_linux_get_max_present_processor(uint32_t max_processors_count)
+ 	uint32_t max_present_processor = 0;
+ 	if (!cpuinfo_linux_parse_cpulist(
+ 		    PRESENT_CPULIST_FILENAME, max_processor_number_parser, &max_present_processor)) {
+-#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
++#if CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64 || CPUINFO_ARCH_LOONGARCH64
+ 		cpuinfo_log_error("failed to parse the list of present processors in %s", PRESENT_CPULIST_FILENAME);
+ #else
+ 		cpuinfo_log_warning("failed to parse the list of present processors in %s", PRESENT_CPULIST_FILENAME);
+diff --git a/src/loongarch/api.h b/src/loongarch/api.h
+new file mode 100644
+index 0000000..06f87b8
+--- /dev/null
++++ b/src/loongarch/api.h
+@@ -0,0 +1,67 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include <cpuinfo.h>
++#include <cpuinfo/common.h>
++
++
++enum cpuinfo_loongarch_chipset_vendor {
++	cpuinfo_loongarch_chipset_vendor_unknown = 0,
++	cpuinfo_loongarch_chipset_vendor_Loongson,
++	cpuinfo_loongarch_chipset_vendor_max,
++};
++
++
++enum cpuinfo_loongarch_chipset_series {
++	cpuinfo_loongarch_chipset_series_unknown = 0,
++	cpuinfo_loongarch_chipset_series_3,
++	cpuinfo_loongarch_chipset_series_max,
++};
++
++
++#define CPUINFO_LOONGARCH_CHIPSET_SUFFIX_MAX 8
++
++struct cpuinfo_loongarch_chipset {
++	enum cpuinfo_loongarch_chipset_vendor vendor;
++	enum cpuinfo_loongarch_chipset_series series;
++};
++
++
++#define CPUINFO_LOONGARCH_CHIPSET_NAME_MAX CPUINFO_PACKAGE_NAME_MAX
++
++#ifndef __cplusplus
++	CPUINFO_INTERNAL void cpuinfo_loongarch_chipset_to_string(
++		const struct cpuinfo_loongarch_chipset chipset[restrict static 1],
++		char name[restrict static CPUINFO_LOONGARCH_CHIPSET_NAME_MAX]);
++
++	CPUINFO_INTERNAL void cpuinfo_loongarch_fixup_chipset(
++		struct cpuinfo_loongarch_chipset chipset[restrict static 1], uint32_t cores);
++
++	CPUINFO_INTERNAL void cpuinfo_loongarch_decode_vendor_uarch(
++		uint32_t cpucfg,
++		enum cpuinfo_vendor vendor[restrict static 1],
++		enum cpuinfo_uarch uarch[restrict static 1]);
++
++	CPUINFO_INTERNAL void cpuinfo_loongarch_decode_cache(
++		enum cpuinfo_uarch uarch,
++		uint32_t cluster_cores,
++		uint32_t arch_version,
++		struct cpuinfo_cache l1i[restrict static 1],
++		struct cpuinfo_cache l1d[restrict static 1],
++		struct cpuinfo_cache l2[restrict static 1],
++		struct cpuinfo_cache l3[restrict static 1]);
++
++	CPUINFO_INTERNAL uint32_t cpuinfo_loongarch_compute_max_cache_size(
++		const struct cpuinfo_processor processor[restrict static 1]);
++#else /* defined(__cplusplus) */
++	CPUINFO_INTERNAL void cpuinfo_loongarch_decode_cache(
++		enum cpuinfo_uarch uarch,
++		uint32_t cluster_cores,
++		uint32_t arch_version,
++		struct cpuinfo_cache l1i[1],
++		struct cpuinfo_cache l1d[1],
++		struct cpuinfo_cache l2[1],
++		struct cpuinfo_cache l3[1]);
++#endif
+\ No newline at end of file
+diff --git a/src/loongarch/cache.c b/src/loongarch/cache.c
+new file mode 100644
+index 0000000..acdf106
+--- /dev/null
++++ b/src/loongarch/cache.c
+@@ -0,0 +1,135 @@
++#include <stdint.h>
++
++#include <cpuinfo.h>
++#include <cpuinfo/internal-api.h>
++#include <cpuinfo/log.h>
++#include <loongarch/api.h>
++#include <loongarch/cpucfg.h>
++
++
++void cpuinfo_loongarch_decode_cache(
++	enum cpuinfo_uarch uarch,
++	uint32_t cluster_cores,
++	uint32_t arch_version,
++	struct cpuinfo_cache l1i[restrict static 1],
++	struct cpuinfo_cache l1d[restrict static 1],
++	struct cpuinfo_cache l2[restrict static 1],
++	struct cpuinfo_cache l3[restrict static 1])
++{
++	switch (uarch) {
++	/*
++		* Loongarch 3A5000 Core Technical Reference Manual
++		* Loongarch 3A5000. About the L1 memory system
++		*   The L1 memory system consists of separate instruction and data caches. Both have a fixed size of 64KB.
++		*
++		* Loongarch 3A5000 L1 instruction-side memory system
++		*   The L1 instruction memory system has the following key features:
++		*    - Virtually Indexed, Physically Tagged (VIPT), four-way set-associative instruction cache.
++		*    - Fixed cache line length of 64 bytes.
++		*
++		* Loongarch 3A5000 L1 data-side memory system
++		*   The L1 data memory system has the following features:
++		*    - Physically Indexed, Physically Tagged (PIPT), 4-way set-associative L1 data cache.
++		*    - Fixed cache line length of 64 bytes.
++		*    - Pseudo-random cache replacement policy.
++		*
++		* Loongarch 3A5000 About the L2 memory system
++		*   The L2 memory subsystem consist of:
++		*    - An 16-way set associative L2 cache with a configurable size of 256KB.
++		*      Cache lines have a fixed length of 64 bytes.
++		*
++		*  +--------------------+-------+-----------+-----------+-----------+----------+
++		*  | Processor model    | Cores | L1D cache | L1I cache | L2 cache  | L3 cache |
++		*  +--------------------+-------+-----------+-----------+-----------+----------+
++		*  | Loongarch 3A5000   | 4(+4) |    64K    |    64K    |    256K   |    16    |
++		*  +--------------------+-------+-----------+-----------+-----------+----------+
++		*
++		*/
++		case cpuinfo_uarch_LA464:
++			*l1i = (struct cpuinfo_cache) {
++				.size = 64 * 1024,
++				.associativity = 4,
++				.line_size = 64
++			};
++			*l1d = (struct cpuinfo_cache) {
++				.size = 64 * 1024,
++				.associativity = 4,
++				.line_size = 64
++			};
++			*l2 = (struct cpuinfo_cache) {
++				.size = 256 * 1024,
++				.associativity = 16,
++				.line_size = 64
++			};
++			*l3 = (struct cpuinfo_cache) {
++				.size = 16 * 1024 * 1024,
++				.associativity = 16,
++				.line_size = 64 
++			};
++		default:
++			cpuinfo_log_warning("loongarch uarch not recognized; using generic cache parameters");
++			/* Follow OpenBLAS */
++			if (arch_version >= 8) {
++				*l1i = (struct cpuinfo_cache) {
++					.size = 32 * 1024,
++					.associativity = 4,
++					.line_size = 64
++				};
++				*l1d = (struct cpuinfo_cache) {
++					.size = 32 * 1024,
++					.associativity = 4,
++					.line_size = 64
++				};
++				*l2 = (struct cpuinfo_cache) {
++					.size = cluster_cores * 256 * 1024,
++					.associativity = 8,
++					.line_size = 64
++				};
++			} else {
++				*l1i = (struct cpuinfo_cache) {
++					.size = 16 * 1024,
++					.associativity = 4,
++					.line_size = 32
++				};
++				*l1d = (struct cpuinfo_cache) {
++					.size = 16 * 1024,
++					.associativity = 4,
++					.line_size = 32
++				};
++				if (arch_version >= 7) {
++					*l2 = (struct cpuinfo_cache) {
++						.size = cluster_cores * 128 * 1024,
++						.associativity = 8,
++						.line_size = 32
++					};
++				}
++			}
++			break;
++	}
++	l1i->sets = l1i->size / (l1i->associativity * l1i->line_size);
++	l1i->partitions = 1;
++	l1d->sets = l1d->size / (l1d->associativity * l1d->line_size);
++	l1d->partitions = 1;
++	if (l2->size != 0) {
++		l2->sets = l2->size / (l2->associativity * l2->line_size);
++		l2->partitions = 1;
++		if (l3->size != 0) {
++			l3->sets = l3->size / (l3->associativity * l3->line_size);
++			l3->partitions = 1;
++		}
++	}
++}
++
++uint32_t cpuinfo_loongarch_compute_max_cache_size(const struct cpuinfo_processor* processor) {
++	/*
++	 * There is no precise way to detect cache size on LOONGARCH64, and cache size reported by cpuinfo
++	 * may underestimate the actual cache size. Thus, we use microarchitecture-specific maximum.
++	 */
++	switch (processor->core->uarch) {
++
++		case cpuinfo_uarch_LA464:
++			return 16 * 1024 * 1024;
++		default:
++			return 4 * 1024 * 1024;
++	}
++}
+\ No newline at end of file
+diff --git a/src/loongarch/cpucfg.h b/src/loongarch/cpucfg.h
+new file mode 100644
+index 0000000..ede7ac8
+--- /dev/null
++++ b/src/loongarch/cpucfg.h
+@@ -0,0 +1,60 @@
++#pragma once
++#include <stdint.h>
++
++
++
++#define CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK  UINT32_C(0x00FF0000)
++#define CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK      UINT32_C(0x0000FF00)
++#define CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK UINT32_C(0x000000FF)
++
++
++#define CPUINFO_LOONGARCH_CPUCFG_COMPANYID_OFFSET 			16
++#define CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_OFFSET       	8
++#define CPUINFO_LOONGARCH_CPUCFG_REVISION_OFFSET      	0
++
++
++
++inline static uint32_t cpucfg_set_companyID(uint32_t cpucfg, uint32_t companyID) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK) |
++		((companyID << CPUINFO_LOONGARCH_CPUCFG_COMPANYID_OFFSET) & CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK);
++}
++
++inline static uint32_t cpucfg_set_processorID(uint32_t cpucfg, uint32_t processorID) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK) |
++		((processorID << CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_OFFSET) & CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK);
++}
++
++inline static uint32_t cpucfg_set_revision(uint32_t cpucfg, uint32_t revision) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK) |
++		((revision << CPUINFO_LOONGARCH_CPUCFG_REVISION_OFFSET) & CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK);
++}
++
++
++
++
++inline static uint32_t cpucfg_get_companyID(uint32_t cpucfg) {
++	return (cpucfg & CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK) >> CPUINFO_LOONGARCH_CPUCFG_COMPANYID_OFFSET;
++}
++
++inline static uint32_t cpucfg_get_processorID(uint32_t cpucfg) {
++	return (cpucfg & CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK) >> CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_OFFSET;
++}
++
++inline static uint32_t cpucfg_get_revision(uint32_t cpucfg) {
++	return (cpucfg & CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK) >> CPUINFO_LOONGARCH_CPUCFG_REVISION_OFFSET;
++}
++
++
++
++inline static uint32_t cpucfg_copy_companyID(uint32_t cpucfg, uint32_t other_cpucfg) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK) | (other_cpucfg & CPUINFO_LOONGARCH_CPUCFG_COMPANYID_MASK);
++}
++
++inline static uint32_t cpucfg_copy_processorID(uint32_t cpucfg, uint32_t other_cpucfg) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK) | (other_cpucfg & CPUINFO_LOONGARCH_CPUCFG_PROCESSORID_MASK);
++}
++
++
++inline static uint32_t cpucfg_copy_revision(uint32_t cpucfg, uint32_t other_cpucfg) {
++	return (cpucfg & ~CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK) | (other_cpucfg & CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK);
++}
+diff --git a/src/loongarch/linux/api.h b/src/loongarch/linux/api.h
+new file mode 100644
+index 0000000..520f153
+--- /dev/null
++++ b/src/loongarch/linux/api.h
+@@ -0,0 +1,118 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include <cpuinfo.h>
++#include <cpuinfo/common.h>
++#include <loongarch/cpucfg.h>
++#include <loongarch/api.h>
++#include <linux/api.h>
++
++/* No hard limit in the kernel, maximum length observed on non-rogue kernels is 64 */
++#define CPUINFO_HARDWARE_VALUE_MAX 64
++/* No hard limit in the kernel, maximum length on Raspberry Pi is 8. Add 1 symbol to detect overly large revision strings */
++#define CPUINFO_REVISION_VALUE_MAX 9
++
++
++#if CPUINFO_ARCH_LOONGARCH64
++	/* /usr/include/loongarch64-linux-gnu/asm/hwcap.h */
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_CPUCFG       UINT32_C(0x00000001)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LAM    UINT32_C(0x00000002)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_UAL  UINT32_C(0x00000004)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_FPU      UINT32_C(0x00000008)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LSX      UINT32_C(0x00000010)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LASX    UINT32_C(0x00000020)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_CRC32     UINT32_C(0x00000040)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_COMPLEX     UINT32_C(0x00000080)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_CRYPTO    UINT32_C(0x00000100)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LVZ  UINT32_C(0x00000200)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_X86     UINT32_C(0x00000400)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_ARM  UINT32_C(0x00000800)
++	#define CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_MIPS    UINT32_C(0x00001000)
++#endif
++
++
++#define CPUINFO_LOONGARCH_LINUX_VALID_COMPANYID UINT32_C(0x00010000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_PROCESSORID  UINT32_C(0x00020000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_REVISION      UINT32_C(0x00040000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR    UINT32_C(0x00200000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_FEATURES     UINT32_C(0x00400000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_INFO          UINT32_C(0x007F0000)
++#define CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG          UINT32_C(0x003F0000)
++
++struct cpuinfo_loongarch_linux_processor {
++	uint32_t architecture_version;
++	uint32_t features;
++	uint32_t cpucfg_id;
++	enum cpuinfo_vendor vendor;
++	enum cpuinfo_uarch uarch;
++	uint32_t uarch_index;
++	/**
++	 * ID of the physical package which includes this logical processor.
++	 * The value is parsed from /sys/devices/system/cpu/cpu<N>/topology/physical_package_id
++	 */
++	uint32_t package_id;
++	/**
++	 * Minimum processor ID on the package which includes this logical processor.
++	 * This value can serve as an ID for the cluster of logical processors: it is the
++	 * same for all logical processors on the same package.
++	 */
++	uint32_t package_leader_id;
++	/**
++	 * Number of logical processors in the package.
++	 */
++	uint32_t package_processor_count;
++
++	/** Linux processor ID */
++	uint32_t system_processor_id;
++	uint32_t flags;
++};
++
++
++CPUINFO_INTERNAL bool cpuinfo_loongarch_linux_parse_proc_cpuinfo(
++	char hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX],
++	uint32_t max_processors_count,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors_count]);
++
++#if CPUINFO_ARCH_LOONGARCH64
++	CPUINFO_INTERNAL void cpuinfo_loongarch_linux_hwcap_from_getauxval(
++		uint32_t hwcap[restrict static 1]);
++
++	CPUINFO_INTERNAL void cpuinfo_loongarch64_linux_decode_isa_from_proc_cpuinfo(
++		uint32_t features,
++		struct cpuinfo_loongarch_isa isa[restrict static 1]);
++#endif
++
++CPUINFO_INTERNAL struct cpuinfo_loongarch_chipset
++	cpuinfo_loongarch_linux_decode_chipset(
++		const char hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX]);
++
++
++CPUINFO_INTERNAL struct cpuinfo_loongarch_chipset
++	cpuinfo_loongarch_linux_decode_chipset_from_proc_cpuinfo_hardware(
++		const char proc_cpuinfo_hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX],
++		bool is_loongson);
++
++
++CPUINFO_INTERNAL bool cpuinfo_loongarch_linux_detect_core_clusters_by_heuristic(
++	uint32_t usable_processors,
++	uint32_t max_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors]);
++
++CPUINFO_INTERNAL void cpuinfo_loongarch_linux_detect_core_clusters_by_sequential_scan(
++	uint32_t max_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors]);
++
++CPUINFO_INTERNAL void cpuinfo_loongarch_linux_count_cluster_processors(
++	uint32_t max_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors]);
++
++CPUINFO_INTERNAL uint32_t cpuinfo_loongarch_linux_detect_cluster_cpucfg(
++	const struct cpuinfo_loongarch_chipset chipset[restrict static 1],
++	uint32_t max_processors,
++	uint32_t usable_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors]);
++
++extern CPUINFO_INTERNAL const uint32_t* cpuinfo_linux_cpu_to_uarch_index_map;
++extern CPUINFO_INTERNAL uint32_t cpuinfo_linux_cpu_to_uarch_index_map_entries;
+\ No newline at end of file
+diff --git a/src/loongarch/linux/chipset.c b/src/loongarch/linux/chipset.c
+new file mode 100644
+index 0000000..55349ca
+--- /dev/null
++++ b/src/loongarch/linux/chipset.c
+@@ -0,0 +1,201 @@
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include <loongarch/linux/api.h>
++#include <cpuinfo/log.h>
++#include <cpuinfo/common.h>
++
++
++static inline bool is_ascii_whitespace(char c) {
++	switch (c) {
++		case ' ':
++		case '\t':
++		case '\r':
++		case '\n':
++			return true;
++		default:
++			return false;
++	}
++}
++
++static inline bool is_ascii_alphabetic(char c) {
++	const char lower_c = c | '\x20';
++	return (uint8_t) (lower_c - 'a') <= (uint8_t) ('z' - 'a');
++}
++
++static inline bool is_ascii_alphabetic_uppercase(char c) {
++	return (uint8_t) (c - 'A') <= (uint8_t) ('Z' - 'A');
++}
++
++static inline bool is_ascii_numeric(char c) {
++	return (uint8_t) (c - '0') < 10;
++}
++
++static inline uint16_t load_u16le(const void* ptr) {
++#if defined(__loongarch64)
++    return *((const uint16_t*) ptr);
++#else
++	const uint8_t* byte_ptr = (const uint8_t*) ptr;
++	return ((uint16_t) byte_ptr[1] << 8) | (uint16_t) byte_ptr[0];
++#endif
++}
++
++static inline uint32_t load_u24le(const void* ptr) {
++#if defined(__loongarch64)
++    return ((uint32_t) ((const uint8_t*) ptr)[2] << 16) | ((uint32_t) *((const uint16_t*) ptr));
++#else
++	const uint8_t* byte_ptr = (const uint8_t*) ptr;
++	return ((uint32_t) byte_ptr[2] << 16) | ((uint32_t) byte_ptr[1] << 8) | (uint32_t) byte_ptr[0];
++#endif
++}
++
++static inline uint32_t load_u32le(const void* ptr) {
++#if defined(__loongarch64)
++    return *((const uint32_t*) ptr);
++#else
++	return ((uint32_t) ((const uint8_t*) ptr)[3] << 24) | load_u24le(ptr);
++#endif
++}
++
++/*
++ * Map from Loongarch chipset series ID to Loongarch chipset vendor ID.
++ * This map is used to avoid storing vendor IDs in tables.
++ */
++
++
++static enum cpuinfo_loongarch_chipset_vendor chipset_series_vendor[cpuinfo_loongarch_chipset_series_max] = {
++	[cpuinfo_loongarch_chipset_series_unknown]                = cpuinfo_loongarch_chipset_vendor_unknown,
++	[cpuinfo_loongarch_chipset_series_3]           = cpuinfo_loongarch_chipset_vendor_Loongson,
++};
++
++
++
++struct loongson_map_entry {
++	const char* platform;
++	uint8_t series;
++};
++
++
++int strcicmp(char const *a, char const *b)
++{
++	for (;; a++, b++) {
++		int d = ((int)(a-b));
++		if (d != 0 || !*a)
++			return d;
++	}
++}
++
++
++static const struct loongson_map_entry loongson_hardware_map_entries[] = {
++	{
++		/* "3A5000" -> Loongson 3a5000 */
++		.platform = "3A5000",
++		.series = cpuinfo_loongarch_chipset_series_3,
++	},
++};
++
++
++
++/*
++ * Decodes chipset name from /proc/cpuinfo Hardware string.
++ * For some chipsets, the function relies frequency and on number of cores for chipset detection.
++ *
++ * @param[in] platform - /proc/cpuinfo Hardware string.
++ //* @param cores - number of cores in the chipset.
++ *
++ * @returns Decoded chipset name. If chipset could not be decoded, the resulting structure would use `unknown` vendor
++ *          and series identifiers.
++ */
++struct cpuinfo_loongarch_chipset cpuinfo_loongarch_linux_decode_chipset_from_proc_cpuinfo_hardware(
++	const char hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX],
++	bool is_loongson)
++{
++	struct cpuinfo_loongarch_chipset chipset;
++	const size_t hardware_length = strnlen(hardware, CPUINFO_HARDWARE_VALUE_MAX);
++	const char* hardware_end = hardware + hardware_length;
++
++	if (is_loongson) {
++		/* Compare to tabulated Hardware values for popular chipsets/devices which can't be otherwise detected */
++		for (size_t i = 0; i < CPUINFO_COUNT_OF(loongson_hardware_map_entries); i++) {
++
++			if (strncmp(loongson_hardware_map_entries[i].platform, hardware, hardware_length) == 0 &&
++					loongson_hardware_map_entries[i].platform[hardware_length] == 0)
++			{
++				cpuinfo_log_debug(
++					"found /proc/cpuinfo Hardware string \"%.*s\" in special chipset table",
++					(int) hardware_length, hardware);
++				/* Create chipset name from entry */
++				return (struct cpuinfo_loongarch_chipset) {
++					.vendor = chipset_series_vendor[loongson_hardware_map_entries[i].series],
++					.series = (enum cpuinfo_loongarch_chipset_series) loongson_hardware_map_entries[i].series,
++				};
++			}
++		}
++	}
++
++	return (struct cpuinfo_loongarch_chipset) {
++		.vendor = cpuinfo_loongarch_chipset_vendor_unknown,
++		.series = cpuinfo_loongarch_chipset_series_unknown,
++	};
++}
++
++
++/* Map from Loongarch chipset vendor ID to its string representation */
++static const char* chipset_vendor_string[cpuinfo_loongarch_chipset_vendor_max] = {
++	[cpuinfo_loongarch_chipset_vendor_unknown]           = "Unknown",
++	[cpuinfo_loongarch_chipset_vendor_Loongson]          = "Loongson",
++};
++
++/* Map from Loongarch chipset series ID to its string representation */
++static const char* chipset_series_string[cpuinfo_loongarch_chipset_series_max] = {
++	[cpuinfo_loongarch_chipset_series_unknown]                = NULL,
++	[cpuinfo_loongarch_chipset_series_3]           = "3",
++};
++
++/* Convert chipset name represented by cpuinfo_loongarch_chipset structure to a string representation */
++void cpuinfo_loongarch_chipset_to_string(
++	const struct cpuinfo_loongarch_chipset chipset[restrict static 1],
++	char name[restrict static CPUINFO_LOONGARCH_CHIPSET_NAME_MAX])
++{
++	enum cpuinfo_loongarch_chipset_vendor vendor = chipset->vendor;
++
++	if (vendor >= cpuinfo_loongarch_chipset_vendor_max) {
++		vendor = cpuinfo_loongarch_chipset_vendor_unknown;
++	}
++	enum cpuinfo_loongarch_chipset_series series = chipset->series;
++	if (series >= cpuinfo_loongarch_chipset_series_max) {
++		series = cpuinfo_loongarch_chipset_series_unknown;
++	}
++
++	const char* vendor_string = chipset_vendor_string[vendor];
++	const char* series_string = chipset_series_string[series];
++
++	if (series == cpuinfo_loongarch_chipset_series_unknown) {
++			strncpy(name, vendor_string, CPUINFO_LOONGARCH_CHIPSET_NAME_MAX);
++	} else {
++		snprintf(name, CPUINFO_LOONGARCH_CHIPSET_NAME_MAX,
++			"%s %s", vendor_string, series_string);
++	}
++}
++
++
++/*
++	* Decodes chipset name from /proc/cpuinfo Hardware string.
++	* For some chipsets, the function relies frequency and on number of cores for chipset detection.
++	*
++	* @param[in] hardware - /proc/cpuinfo Hardware string.
++	*
++	* @returns Decoded chipset name. If chipset could not be decoded, the resulting structure would use `unknown` vendor
++	*          and series identifiers.
++	*/
++struct cpuinfo_loongarch_chipset cpuinfo_loongarch_linux_decode_chipset(
++	const char hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX])
++{
++	struct cpuinfo_loongarch_chipset chipset =
++		cpuinfo_loongarch_linux_decode_chipset_from_proc_cpuinfo_hardware(
++			hardware, true);
++
++	return chipset;
++}
+diff --git a/src/loongarch/linux/clusters.c b/src/loongarch/linux/clusters.c
+new file mode 100644
+index 0000000..6a2ccfe
+--- /dev/null
++++ b/src/loongarch/linux/clusters.c
+@@ -0,0 +1,48 @@
++#include <stdint.h>
++#include <stddef.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <cpuinfo.h>
++#include <loongarch/linux/api.h>
++#include <loongarch/api.h>
++#include <loongarch/cpucfg.h>
++#include <linux/api.h>
++#include <cpuinfo/internal-api.h>
++#include <cpuinfo/log.h>
++
++static inline bool bitmask_all(uint32_t bitfield, uint32_t mask) {
++	return (bitfield & mask) == mask;
++}
++
++
++/*
++ * Counts the number of logical processors in each core cluster.
++ * This function should be called after all processors are assigned to core clusters.
++ *
++ * @param max_processors - number of elements in the @p processors array.
++ * @param[in,out] processors - processor descriptors with pre-parsed POSSIBLE and PRESENT flags,
++ *                             and decoded core cluster (package_leader_id) information.
++ *                             The function expects the value of processors[i].package_processor_count to be zero.
++ *                             Upon return, processors[i].package_processor_count will contain the number of logical
++ *                             processors in the respective core cluster.
++ */
++void cpuinfo_loongarch_linux_count_cluster_processors(
++	uint32_t max_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors])
++{
++	/* First pass: accumulate the number of processors at the group leader's package_processor_count */
++	for (uint32_t i = 0; i < max_processors; i++) {
++		if (bitmask_all(processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			const uint32_t package_leader_id = processors[i].package_leader_id;
++			processors[package_leader_id].package_processor_count += 1;
++		}
++	}
++	/* Second pass: copy the package_processor_count from the group leader processor */
++	for (uint32_t i = 0; i < max_processors; i++) {
++		if (bitmask_all(processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			const uint32_t package_leader_id = processors[i].package_leader_id;
++			processors[i].package_processor_count = processors[package_leader_id].package_processor_count;
++		}
++	}
++}
+\ No newline at end of file
+diff --git a/src/loongarch/linux/cpucfg.c b/src/loongarch/linux/cpucfg.c
+new file mode 100644
+index 0000000..5e113f2
+--- /dev/null
++++ b/src/loongarch/linux/cpucfg.c
+@@ -0,0 +1,264 @@
++#include <stdint.h>
++#include <stddef.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <cpuinfo.h>
++#include <loongarch/linux/api.h>
++#include <loongarch/api.h>
++#include <loongarch/cpucfg.h>
++#include <linux/api.h>
++#include <cpuinfo/internal-api.h>
++#include <cpuinfo/log.h>
++#include <cpuinfo/common.h>
++
++
++#define CLUSTERS_MAX 3
++
++static inline bool bitmask_all(uint32_t bitfield, uint32_t mask) {
++	return (bitfield & mask) == mask;
++}
++
++/* Description of core clusters configuration in a chipset (identified by series) */
++struct cluster_config {
++	/* Number of cores (logical processors) */
++	uint8_t cores;
++	/* Loongarch chipset series (see cpuinfo_loongarch_chipset_series enum) */
++	uint8_t series;
++	/* Number of heterogenous clusters in the CPU package */
++	uint8_t clusters;
++	/* Number of cores in each cluster */
++	uint8_t cluster_cores[CLUSTERS_MAX];
++	/* CPUCFG of cores in each cluster */
++	uint32_t cluster_cpucfg[CLUSTERS_MAX];
++};
++
++
++static const struct cluster_config cluster_configs[] = {
++	{
++		.cores = 4,
++		.series = cpuinfo_loongarch_chipset_series_3,
++	},
++};
++
++/*
++ * Searches chipset name in mapping of chipset name to cores' CPUCFG values. If match is successful, initializes CPUCFG
++ * for all clusters' leaders with tabulated values.
++ *
++ * @param[in] chipset - chipset (SoC) name information.
++ * @param clusters_count - number of CPU core clusters detected in the SoC.
++ * @param cluster_leaders - indices of core clusters' leaders in the @p processors array.
++ * @param processors_count - number of usable logical processors in the system.
++ * @param[in,out] processors - array of logical processor descriptions with pre-parsed CPUCFG, maximum frequency,
++ *                             and decoded core cluster (package_leader_id) information.
++ *                             Upon successful return, processors[i].cpucfg for all clusters' leaders contains the
++ *                             tabulated CPUCFG values.
++ * @param verify_cpucfg - indicated whether the function should check that the CPUCFG values to be assigned to leaders of
++ *                      core clusters are consistent with known parts of their parsed values.
++ *                      Set if to false if the only CPUCFG value parsed from /proc/cpuinfo is for the last processor
++ *                      reported in /proc/cpuinfo and thus can't be unambiguously attributed to that processor.
++ *
++ * @retval true if the chipset was found in the mapping and core clusters' leaders initialized with CPUCFG values.
++ * @retval false if the chipset was not found in the mapping, or any consistency check failed.
++ */
++static bool cpuinfo_loongarch_linux_detect_cluster_cpucfg_by_chipset(
++	const struct cpuinfo_loongarch_chipset chipset[restrict static 1],
++	uint32_t clusters_count,
++	const uint32_t cluster_leaders[restrict static CLUSTERS_MAX],
++	uint32_t processors_count,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static processors_count],
++	bool verify_cpucfg)
++{
++	if (clusters_count <= CLUSTERS_MAX) {
++		for (uint32_t c = 0; c < CPUINFO_COUNT_OF(cluster_configs); c++) {
++			if (cluster_configs[c].series == chipset->series) {
++				/* Verify that the total number of cores and clusters of cores matches expectation */
++				if (cluster_configs[c].cores != processors_count || cluster_configs[c].clusters != clusters_count) {
++					return false;
++				}
++
++				/* Verify that core cluster configuration matches expectation */
++				for (uint32_t cluster = 0; cluster < clusters_count; cluster++) {
++					const uint32_t cluster_leader = cluster_leaders[cluster];
++					if (cluster_configs[c].cluster_cores[cluster] != processors[cluster_leader].package_processor_count) {
++						return false;
++					}
++				}
++
++				if (verify_cpucfg) {
++					/* Verify known parts of CPUCFG */
++					for (uint32_t cluster = 0; cluster < clusters_count; cluster++) {
++						const uint32_t cluster_leader = cluster_leaders[cluster];
++
++						/* Create a mask of known cpucfg bits */
++						uint32_t cpucfg_mask = 0;
++
++						if (processors[cluster_leader].flags & CPUINFO_LOONGARCH_LINUX_VALID_REVISION) {
++							cpucfg_mask |= CPUINFO_LOONGARCH_CPUCFG_REVISION_MASK;
++						}
++
++						/* Verify the bits under the mask */
++						if ((processors[cluster_leader].cpucfg_id ^ cluster_configs[c].cluster_cpucfg[cluster]) & cpucfg_mask) {
++							cpuinfo_log_debug("parsed CPUCFG of cluster %08"PRIu32" does not match tabulated value %08"PRIu32,
++								processors[cluster_leader].cpucfg_id, cluster_configs[c].cluster_cpucfg[cluster]);
++							return false;
++						}
++					}
++				}
++
++				/* Assign CPUCFGs according to tabulated configurations */
++				for (uint32_t cluster = 0; cluster < clusters_count; cluster++) {
++					const uint32_t cluster_leader = cluster_leaders[cluster];
++					processors[cluster_leader].cpucfg_id = cluster_configs[c].cluster_cpucfg[cluster];
++					processors[cluster_leader].flags |= CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG;
++					cpuinfo_log_debug("cluster %"PRIu32" CPUCFG = 0x%08"PRIx32, cluster, cluster_configs[c].cluster_cpucfg[cluster]);
++				}
++				return true;
++			}
++		}
++	}
++	return false;
++}
++
++
++/*
++ * Initializes CPUCFG for leaders of core clusters in a single sequential scan:
++ *  - Clusters preceding the first reported CPUCFG value are assumed to have default CPUCFG value.
++ *  - Clusters following any reported CPUCFG value to have that CPUCFG value.
++ *
++ * @param default_cpucfg - CPUCFG value that will be assigned to cluster leaders preceding any reported CPUCFG value.
++ * @param processors_count - number of logical processor descriptions in the @p processors array.
++ * @param[in,out] processors - array of logical processor descriptions with pre-parsed CPUCFG, maximum frequency,
++ *                             and decoded core cluster (package_leader_id) information.
++ *                             Upon successful return, processors[i].cpucfg for all core clusters' leaders contains
++ *                             the assigned CPUCFG value.
++ */
++static void cpuinfo_loongarch_linux_detect_cluster_cpucfg_by_sequential_scan(
++	uint32_t default_cpucfg,
++	uint32_t processors_count,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static processors_count])
++{
++	uint32_t cpucfg = default_cpucfg;
++	for (uint32_t i = 0; i < processors_count; i++) {
++		if (bitmask_all(processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			if (processors[i].package_leader_id == i) {
++				if (bitmask_all(processors[i].flags,CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG)) {
++					cpucfg = processors[i].cpucfg_id;
++				} else {
++					cpuinfo_log_info("assume processor %"PRIu32" to have CPUCFG %08"PRIx32, i, cpucfg);
++					/* To be consistent, we copy the CPUCFG entirely, rather than by parts */
++					processors[i].cpucfg_id = cpucfg;
++					processors[i].flags |=CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG;
++				}
++			}
++		}
++	}
++}
++
++/*
++ * Detects CPUCFG of each CPU core clusters' leader.
++ *
++ * @param[in] chipset - chipset (SoC) name information.
++ * @param max_processors - number of processor descriptions in the @p processors array.
++ * @param usable_processors - number of processor descriptions in the @p processors array with both POSSIBLE and
++ *                            PRESENT flags.
++ * @param[in,out] processors - array of logical processor descriptions with pre-parsed CPUCFG, maximum frequency,
++ *                             and decoded core cluster (package_leader_id) information.
++ *                             Upon return, processors[i].cpucfg for all clusters' leaders contains the CPUCFG value.
++ *
++ * @returns The number of core clusters
++ */
++uint32_t cpuinfo_loongarch_linux_detect_cluster_cpucfg(
++	const struct cpuinfo_loongarch_chipset chipset[restrict static 1],
++	uint32_t max_processors,
++	uint32_t usable_processors,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors])
++{
++	uint32_t clusters_count = 0;
++	uint32_t cluster_leaders[CLUSTERS_MAX];
++	uint32_t last_processor_in_cpuinfo = max_processors;
++	uint32_t last_processor_with_cpucfg = max_processors;
++	uint32_t processors_with_cpucfg_count = 0;
++	for (uint32_t i = 0; i < max_processors; i++) {
++		if (bitmask_all(processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			if (processors[i].flags & CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR) {
++				last_processor_in_cpuinfo = i;
++			}
++
++			const uint32_t group_leader = processors[i].package_leader_id;
++			if (group_leader == i) {
++				if (clusters_count < CLUSTERS_MAX) {
++					cluster_leaders[clusters_count] = i;
++				}
++				clusters_count += 1;
++			} else {
++				/* Copy known bits of information to cluster leader */
++				if (!bitmask_all(processors[group_leader].flags,CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG) &&
++					bitmask_all(processors[i].flags,CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG))
++				{
++					processors[group_leader].cpucfg_id = processors[i].cpucfg_id;
++					processors[group_leader].flags |=CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG;
++				}
++			}
++		}
++	}
++	cpuinfo_log_debug("detected %"PRIu32" core clusters", clusters_count);
++
++	/*
++	 * Two relations between reported /proc/cpuinfo information, and cores is possible:
++	 * - /proc/cpuinfo reports information for all or some of the cores below the corresponding
++	 *   "processor : <number>" lines. Information on offline cores may be missing.
++	 * - /proc/cpuinfo reports information only once, after all "processor : <number>" lines.
++	 *   The reported information may relate to processor #0 or to the processor which
++	 *   executed the system calls to read /proc/cpuinfo. It is also indistinguishable
++	 *   from /proc/cpuinfo reporting information only for the last core (e.g. if all other
++	 *   cores are offline).
++	 *
++	 * We detect the second case by checking if /proc/cpuinfo contains valid CPUCFG only for one,
++	 * last reported, processor. Note, that the last reported core may be not the last
++	 * present & possible processor, as /proc/cpuinfo may non-report high-index offline cores.
++	 */
++
++	if (processors_with_cpucfg_count < usable_processors) {
++		/*
++		 * /proc/cpuinfo reported CPUCFG only for some processors, and probably some core clusters do not have CPUCFG
++		 * for any of the cores. Check if this is the case.
++		 */
++		uint32_t clusters_with_cpucfg_count = 0;
++		for (uint32_t i = 0; i < max_processors; i++) {
++			if (bitmask_all(processors[i].flags, CPUINFO_LINUX_FLAG_VALID |CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG)) {
++				if (processors[i].package_leader_id == i) {
++					clusters_with_cpucfg_count += 1;
++				}
++			}
++		}
++
++		if (clusters_with_cpucfg_count < clusters_count) {
++			/*
++			 * /proc/cpuinfo reported CPUCFG only for some clusters, need to reconstruct others.
++			 * We make three attempts to detect CPUCFG for clusters without it:
++			 * 1. Search tabulated CPUCFG values for chipsets which have heterogeneous clusters and ship with Linux
++			 *    kernels which do not always report all cores in /proc/cpuinfo. If found, use the tabulated values.
++			 * 2. For systems with 2 clusters and CPUCFG known for one cluster, assume big.LITTLE configuration,
++			 *    and estimate CPUCFG for the other cluster under assumption that CPUCFG for the big cluster is known.
++			 * 3. Initialize CPUCFGs for core clusters in a single sequential scan:
++			 *    - Clusters preceding the first reported CPUCFG value are assumed to have the last reported CPUCFG value.
++			 *    - Clusters following any reported CPUCFG value to have that CPUCFG value.
++			 */
++
++			if (cpuinfo_loongarch_linux_detect_cluster_cpucfg_by_chipset(
++				chipset, clusters_count, cluster_leaders, usable_processors, processors, true))
++			{
++				return clusters_count;
++			}
++
++			if (last_processor_with_cpucfg != max_processors) {
++				/* Fall back to sequential initialization of CPUCFG values for core clusters */
++				cpuinfo_loongarch_linux_detect_cluster_cpucfg_by_sequential_scan(
++					processors[processors[last_processor_with_cpucfg].package_leader_id].cpucfg_id,
++					max_processors, processors);
++			}
++		}
++	}
++	return clusters_count;
++}
+\ No newline at end of file
+diff --git a/src/loongarch/linux/cpuinfo.c b/src/loongarch/linux/cpuinfo.c
+new file mode 100644
+index 0000000..92fdfcd
+--- /dev/null
++++ b/src/loongarch/linux/cpuinfo.c
+@@ -0,0 +1,566 @@
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <stddef.h>
++#include <string.h>
++
++#include <linux/api.h>
++#include <loongarch/linux/api.h>
++#include <loongarch/cpucfg.h>
++#include <cpuinfo/log.h>
++
++/*
++ * Size, in chars, of the on-stack buffer used for parsing lines of /proc/cpuinfo.
++ * This is also the limit on the length of a single line.
++ */
++#define BUFFER_SIZE 1024
++
++struct cpuinfo_loongarch_processorID{
++	const char* name;
++	uint32_t processorID;
++};
++
++
++static const struct cpuinfo_loongarch_processorID loongson_name_map_processorID[] = {
++	{
++		/* "3A5000" -> 0xc0 */
++		.name = "3A5000",
++		.processorID = 0xc0,
++	},
++};
++
++
++
++static uint32_t parse_processor_number(
++	const char* processor_start,
++	const char* processor_end)
++{
++	const size_t processor_length = (size_t) (processor_end - processor_start);
++
++	if (processor_length == 0) {
++		cpuinfo_log_warning("Processor number in /proc/cpuinfo is ignored: string is empty");
++		return 0;
++	}
++
++	uint32_t processor_number = 0;
++	for (const char* digit_ptr = processor_start; digit_ptr != processor_end; digit_ptr++) {
++		const uint32_t digit = (uint32_t) (*digit_ptr - '0');
++		if (digit > 10) {
++			cpuinfo_log_warning("non-decimal suffix %.*s in /proc/cpuinfo processor number is ignored",
++				(int) (processor_end - digit_ptr), digit_ptr);
++			break;
++		}
++
++		processor_number = processor_number * 10 + digit;
++	}
++
++	return processor_number;
++}
++
++/*
++ *	Full list of Loongarch features reported in /proc/cpuinfo:
++ */
++static void parse_features(
++	const char* features_start,
++	const char* features_end,
++	struct cpuinfo_loongarch_linux_processor processor[restrict static 1])
++{
++	const char* feature_start = features_start;
++	const char* feature_end;
++
++	/* Mark the features as valid */
++	processor->flags |= CPUINFO_LOONGARCH_LINUX_VALID_FEATURES | CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
++
++	do {
++		feature_end = feature_start + 1;
++		for (; feature_end != features_end; feature_end++) {
++			if (*feature_end == ' ') {
++				break;
++			}
++		}
++		const size_t feature_length = (size_t) (feature_end - feature_start);
++
++		switch (feature_length) {
++			case 3:
++				if (memcmp(feature_start, "lam", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LAM;
++					#endif
++				} else if (memcmp(feature_start, "ual", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_UAL;
++					#endif
++				} else if (memcmp(feature_start, "lsx", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LSX;
++					#endif
++				} else if (memcmp(feature_start, "fpu", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_FPU;
++					#endif
++				} else if (memcmp(feature_start, "lvz", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LVZ;
++					#endif
++				} else {
++					goto unexpected;
++				}
++				break;
++			case 4:
++				if (memcmp(feature_start, "lasx", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LASX;
++					#endif
++				} else {
++					goto unexpected;
++				}
++				break;
++			case 5:
++				if (memcmp(feature_start, "crc32", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_CRC32;
++					#endif
++				} else {
++					goto unexpected;
++				}
++ 				break;
++			case 6:
++				if (memcmp(feature_start, "crypto", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_CRYPTO;
++					#endif
++				} else if (memcmp(feature_start, "cpucfg", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_CPUCFG;
++					#endif
++				} else {
++					goto unexpected;
++				}
++				break;
++			case 7:
++				if (memcmp(feature_start, "complex", feature_length) == 0) {
++					processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_COMPLEX;
++				} else if (memcmp(feature_start, "lbt_x86", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_MIPS;
++					#endif
++				} else if (memcmp(feature_start, "lbt_arm", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_ARM;
++					#endif
++				} else {
++					goto unexpected;
++				}
++				break;
++			case 8:
++				if (memcmp(feature_start, "lbt_mips", feature_length) == 0) {
++					#if CPUINFO_ARCH_LOONGARCH64
++						processor->features |= CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_X86;
++					#endif
++				} else {
++					goto unexpected;
++				}
++			default:
++			unexpected:
++				cpuinfo_log_warning("unexpected /proc/cpuinfo feature \"%.*s\" is ignored",
++					(int) feature_length, feature_start);
++				break;
++		}
++		feature_start = feature_end;
++		for (; feature_start != features_end; feature_start++) {
++			if (*feature_start != ' ') {
++				break;
++			}
++		}
++	} while (feature_start != feature_end);
++}
++
++static bool parse_loongson(const char* name_start, size_t length){
++	/* expected loongson , its length is eight */
++	if(length != 8) return false;
++	/* expected loongson , its first char is 'l' or 'L' */
++	if(name_start[0] != 'l' && name_start[0] != 'L') return false;
++
++	char* elsechars = "oongson";
++	for(int i = 0;i<7;i++){
++		if(name_start[i+1] != elsechars[i]) return false;
++	}
++	return true;
++}
++
++static void parse_processorID(const char* name_start, size_t length, int* processorID){
++	/* expected 3A5000 or 3C5000L or other , its length is 6 or 7 */
++	if(length != 6 && length != 7) return ;
++	char cpy[] = "";
++	for (size_t i = 0; i < CPUINFO_COUNT_OF(loongson_name_map_processorID); i++) {
++
++			if (strncmp(loongson_name_map_processorID[i].name, strncpy(cpy, name_start,length), length) == 0)
++			{
++				cpuinfo_log_debug(
++					"found /proc/cpuinfo model name second string \"%.*s\" in loongson processorID table",
++					(int) length, name_start);
++				/* Create chipset name from entry */
++				*processorID = loongson_name_map_processorID[i].processorID;
++			}
++	}
++}
++
++static void parse_model_name(
++	const char* model_name_start,
++	const char* model_name_end,
++	char* hardware,
++	struct cpuinfo_loongarch_linux_processor processor[restrict static 1])
++{	
++	const char* separator = model_name_start;
++	for (; separator != model_name_end; separator++) {
++		if (*separator == '-') {
++			break;
++		}
++	}
++
++	const size_t model_length = (size_t) (separator - model_name_start);
++	const size_t name_length = (size_t) (model_name_end - (separator+1));
++
++	size_t value_length = name_length;
++
++	if (value_length > CPUINFO_HARDWARE_VALUE_MAX) {
++		cpuinfo_log_info(
++			"length of model name value \"%.*s\" in /proc/cpuinfo exceeds limit (%d): truncating to the limit",
++			(int) value_length, separator+1, CPUINFO_HARDWARE_VALUE_MAX);
++		value_length = CPUINFO_HARDWARE_VALUE_MAX;
++	} else {
++		hardware[value_length] = '\0';
++	}
++	memcpy(hardware, separator+1, value_length);
++	cpuinfo_log_debug("parsed /proc/cpuinfo model name second value = \"%.*s\"", (int) value_length, separator+1);
++
++	if (model_length != 8) {
++		cpuinfo_log_warning("Model %.*s in /proc/cpuinfo is ignored due to unexpected length (%zu)",
++			(int) model_length, model_name_start, separator - 1);
++		return;
++	}
++	if (name_length < 6 || name_length > 7) {
++		cpuinfo_log_warning("Model %.*s in /proc/cpuinfo is ignored due to unexpected length (%zu)",
++			(int) name_length, separator + 1, model_name_end);
++		return;
++	}
++	uint32_t cpucfg_companyID = 0;
++	uint32_t cpucfg_processorID = 0;
++
++	/* Verify the presence of hex prefix */
++	bool is_loongson = parse_loongson(model_name_start, model_length);
++	if (is_loongson) {
++		cpucfg_companyID = 0x14;
++		processor->cpucfg_id = cpucfg_set_companyID(processor->cpucfg_id, cpucfg_companyID);
++		processor->flags |= CPUINFO_LOONGARCH_LINUX_VALID_COMPANYID | CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
++	}else{
++		cpuinfo_log_warning("Model %.*s in /proc/cpuinfo is ignored due to unexpected words",
++			(int) model_length, model_name_start);
++		return;
++	}
++	parse_processorID(separator + 1, name_length, &cpucfg_processorID);
++	processor->cpucfg_id = cpucfg_set_processorID(processor->cpucfg_id, cpucfg_processorID);
++	processor->flags |= CPUINFO_LOONGARCH_LINUX_VALID_PROCESSORID | CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
++
++}
++static void parse_cpu_revision(
++	const char* cpu_revision_start,
++	const char* cpu_revision_end,
++	struct cpuinfo_loongarch_linux_processor processor[restrict static 1])
++{
++	const size_t cpu_revision_length = cpu_revision_end - cpu_revision_start;
++
++	if (cpu_revision_length != 4) {
++		cpuinfo_log_warning("CPU revision %.*s in /proc/cpuinfo is ignored due to unexpected length (%zu)",
++			(int) cpu_revision_length, cpu_revision_start, cpu_revision_length);
++		return;
++	}
++
++	/* Skip if there is no hex prefix (0x) */
++	if (cpu_revision_start[0] != '0' || cpu_revision_start[1] != 'x') {
++		cpuinfo_log_warning("CPU revision %.*s in /proc/cpuinfo is ignored due to lack of 0x prefix",
++			(int) cpu_revision_length, cpu_revision_start);
++		return;
++	}
++
++	/* Check if the value after hex prefix is indeed a hex digit and decode it. */
++	char digit_char = cpu_revision_start[2];
++	uint32_t cpu_revision = 0;
++	if ((uint32_t) (digit_char - '0') < 10) {
++		cpu_revision = (uint32_t) (digit_char - '0');
++	} else if ((uint32_t) (digit_char - 'A') < 6) {
++		cpu_revision = 10 + (uint32_t) (digit_char - 'A');
++	} else if ((uint32_t) (digit_char - 'a') < 6) {
++		cpu_revision = 10 + (uint32_t) (digit_char - 'a');
++	} else {
++		cpuinfo_log_warning("CPU revision %.*s in /proc/cpuinfo is ignored due to unexpected non-hex character '%c'",
++			(int) cpu_revision_length, cpu_revision_start, digit_char);
++		return;
++	}
++	cpu_revision = cpu_revision * 16;
++
++	digit_char = cpu_revision_start[3];
++	if ((uint32_t) (digit_char - '0') < 10) {
++		cpu_revision = (uint32_t) (digit_char - '0');
++	} else if ((uint32_t) (digit_char - 'A') < 6) {
++		cpu_revision = 10 + (uint32_t) (digit_char - 'A');
++	} else if ((uint32_t) (digit_char - 'a') < 6) {
++		cpu_revision = 10 + (uint32_t) (digit_char - 'a');
++	} else {
++		cpuinfo_log_warning("CPU revision %.*s in /proc/cpuinfo is ignored due to unexpected non-hex character '%c'",
++			(int) cpu_revision_length, cpu_revision_start, digit_char);
++		return;
++	}
++
++	processor->cpucfg_id = cpucfg_set_revision(processor->cpucfg_id, cpu_revision);
++	processor->flags |= CPUINFO_LOONGARCH_LINUX_VALID_REVISION | CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
++}
++
++static void parse_package(
++	const char* cpu_package_start,
++	const char* cpu_package_end,
++	struct cpuinfo_loongarch_linux_processor processor[restrict static 1])
++{
++	uint32_t cpu_package = 0;
++	for (const char* digit_ptr = cpu_package_start; digit_ptr != cpu_package_end; digit_ptr++) {
++		const uint32_t digit = (uint32_t) (*digit_ptr - '0');
++
++		/* Verify that the character in package is a decimal digit */
++		if (digit >= 10) {
++			cpuinfo_log_warning("package %.*s in /proc/cpuinfo is ignored due to unexpected non-digit character '%c' at offset %zu",
++				(int) (cpu_package_end - cpu_package_start), cpu_package_start,
++				*digit_ptr, (size_t) (digit_ptr - cpu_package_start));
++			return;
++		}
++
++		cpu_package = cpu_package * 10 + digit;
++	}
++
++	processor->package_id = cpu_package;
++}
++
++struct proc_cpuinfo_parser_state {
++	char* hardware;
++	uint32_t processor_index;
++	uint32_t max_processors_count;
++	struct cpuinfo_loongarch_linux_processor* processors;
++	struct cpuinfo_loongarch_linux_processor dummy_processor;
++};
++
++/*
++ *	Decode a single line of /proc/cpuinfo information.
++ *	Lines have format <words-with-spaces>[ ]*:[ ]<space-separated words>
++ *	An example of /proc/cpuinfo (from Loongarch-3a5000):
++ *
++ *		system type		: generic-loongson-machine
++ *		processor		: 0
++ *		package			: 0
++ *		core			: 0
++ *		cpu family		: Loongson-64bit
++ *		model name		: Loongson-3A5000
++ *		CPU Revision		: 0x10
++ *		FPU Revision		: 0x00
++ *		CPU MHz			: 2300.00
++ *		BogoMIPS		: 4600.00
++ *		TLB entries		: 2112
++ *		Address sizes		: 48 bits physical, 48 bits virtual
++ *		isa			: loongarch32 loongarch64
++ *		features		: cpucfg lam ual fpu lsx lasx complex crypto lvz lbt_x86 lbt_arm lbt_mips
++ *		hardware watchpoint	: yes, iwatch count: 8, dwatch count: 8
++ */
++static bool parse_line(
++	const char* line_start,
++	const char* line_end,
++	struct proc_cpuinfo_parser_state state[restrict static 1],
++	uint64_t line_number)
++{
++	/* Empty line. Skip. */
++	if (line_start == line_end) {
++		return true;
++	}
++
++	/* Search for ':' on the line. */
++	const char* separator = line_start;
++	for (; separator != line_end; separator++) {
++		if (*separator == ':') {
++			break;
++		}
++	}
++	/* Skip line if no ':' separator was found. */
++	if (separator == line_end) {
++		cpuinfo_log_info("Line %.*s in /proc/cpuinfo is ignored: key/value separator ':' not found",
++			(int) (line_end - line_start), line_start);
++		return true;
++	}
++
++	/* Skip trailing spaces in key part. */
++	const char* key_end = separator;
++	for (; key_end != line_start; key_end--) {
++		if (key_end[-1] != ' ' && key_end[-1] != '\t') {
++			break;
++		}
++	}
++	/* Skip line if key contains nothing but spaces. */
++	if (key_end == line_start) {
++		cpuinfo_log_info("Line %.*s in /proc/cpuinfo is ignored: key contains only spaces",
++			(int) (line_end - line_start), line_start);
++		return true;
++	}
++
++	/* Skip leading spaces in value part. */
++	const char* value_start = separator + 1;
++	for (; value_start != line_end; value_start++) {
++		if (*value_start != ' ') {
++			break;
++		}
++	}
++	/* Value part contains nothing but spaces. Skip line. */
++	if (value_start == line_end) {
++		cpuinfo_log_info("Line %.*s in /proc/cpuinfo is ignored: value contains only spaces",
++			(int) (line_end - line_start), line_start);
++		return true;
++	}
++
++	/* Skip trailing spaces in value part (if any) */
++	const char* value_end = line_end;
++	for (; value_end != value_start; value_end--) {
++		if (value_end[-1] != ' ') {
++			break;
++		}
++	}
++
++	const uint32_t processor_index      = state->processor_index;
++	const uint32_t max_processors_count = state->max_processors_count;
++	struct cpuinfo_loongarch_linux_processor* processors = state->processors;
++	struct cpuinfo_loongarch_linux_processor* processor  = &state->dummy_processor;
++	if (processor_index < max_processors_count) {
++		processor = &processors[processor_index];
++	}
++
++	const size_t key_length = key_end - line_start;
++	switch (key_length) {
++		case 3:
++			if (memcmp(line_start, "isa", key_length) == 0) {
++				/* isa Revision is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 4:
++			if (memcmp(line_start, "core", key_length) == 0) {
++				/* core is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 7:
++			if (memcmp(line_start, "package", key_length) == 0) {
++				parse_package(value_start, value_end, processor);
++			} else if (memcmp(line_start, "CPU MHz", key_length) == 0) {
++				/* CPU MHz is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 8:
++			if (memcmp(line_start, "features", key_length) == 0) {
++				parse_features(value_start, value_end, processor);
++			} else if (memcmp(line_start, "BogoMIPS", key_length) == 0) {
++				/* BogoMIPS is useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 9:
++			if (memcmp(line_start, "processor", key_length) == 0) {
++				const uint32_t new_processor_index = parse_processor_number(value_start, value_end);
++				if (new_processor_index < processor_index) {
++					/* Strange: decreasing processor number */
++					cpuinfo_log_warning(
++						"unexpectedly low processor number %"PRIu32" following processor %"PRIu32" in /proc/cpuinfo",
++						new_processor_index, processor_index);
++				} else if (new_processor_index > processor_index + 1) {
++					/* Strange, but common: skipped processor $(processor_index + 1) */
++					cpuinfo_log_info(
++						"unexpectedly high processor number %"PRIu32" following processor %"PRIu32" in /proc/cpuinfo",
++						new_processor_index, processor_index);
++				}
++				if (new_processor_index < max_processors_count) {
++					/* Record that the processor was mentioned in /proc/cpuinfo */
++					processors[new_processor_index].flags |= CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
++				} else {
++					/* Log and ignore processor */
++					cpuinfo_log_warning("processor %"PRIu32" in /proc/cpuinfo is ignored: index exceeds system limit %"PRIu32,
++						new_processor_index, max_processors_count - 1);
++				}
++				state->processor_index = new_processor_index;
++				processors[new_processor_index].cpucfg_id = new_processor_index;
++				return true;
++			} else{
++				goto unknown;
++			}
++			break;
++		case 10:
++			if (memcmp(line_start, "cpu family", key_length) == 0) {
++				/* cpu family is presently useless, don't parse */
++			} else if (memcmp(line_start, "model name", key_length) == 0) {
++				parse_model_name(value_start,value_end,state->hardware,processor);
++			} else {
++				goto unknown;
++			}
++			break;		
++		case 11:
++			if (memcmp(line_start, "system type", key_length) == 0) {
++				/* system type is presently useless, don't parse */
++			} else if (memcmp(line_start, "TLB entries", key_length) == 0) {
++				/* TLB entries is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 12:
++			if (memcmp(line_start, "CPU Revision", key_length) == 0) {
++				/* CPU Revision is presently useless, don't parse */
++			} else if (memcmp(line_start, "FPU Revision", key_length) == 0) {
++				/* FPU Revision is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 13:
++			if (memcmp(line_start, "Address sizes", key_length) == 0) {
++				/* Address sizes is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		case 18:
++			if (memcmp(line_start, "hardware watchpoint", key_length) == 0) {
++				/* Address sizes is presently useless, don't parse */
++			} else {
++				goto unknown;
++			}
++			break;
++		default:
++		unknown:
++			cpuinfo_log_debug("unknown /proc/cpuinfo key: %.*s", (int) key_length, line_start);
++
++	}
++	return true;
++}
++
++bool cpuinfo_loongarch_linux_parse_proc_cpuinfo(
++	char hardware[restrict static CPUINFO_HARDWARE_VALUE_MAX],
++	uint32_t max_processors_count,
++	struct cpuinfo_loongarch_linux_processor processors[restrict static max_processors_count])
++{
++	struct proc_cpuinfo_parser_state state = {
++		.hardware = hardware,
++		.processor_index = 0,
++		.max_processors_count = max_processors_count,
++		.processors = processors,
++	};
++	cpuinfo_log_debug("");
++	return cpuinfo_linux_parse_multiline_file("/proc/cpuinfo", BUFFER_SIZE,
++		(cpuinfo_line_callback) parse_line, &state);
++}
+diff --git a/src/loongarch/linux/hwcap.c b/src/loongarch/linux/hwcap.c
+new file mode 100644
+index 0000000..83ed1e1
+--- /dev/null
++++ b/src/loongarch/linux/hwcap.c
+@@ -0,0 +1,45 @@
++#include <string.h>
++
++#include <unistd.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <dlfcn.h>
++#include <elf.h>
++
++#if CPUINFO_MOCK
++	#include <cpuinfo-mock.h>
++#endif
++#include <cpuinfo.h>
++#include <loongarch/linux/api.h>
++#include <cpuinfo/log.h>
++
++#if CPUINFO_ARCH_LOONGARCH64
++	#include <sys/auxv.h>
++#else
++	#define AT_HWCAP 16
++#endif
++
++
++#if CPUINFO_MOCK
++	static uint32_t mock_hwcap = 0;
++	void cpuinfo_set_hwcap(uint32_t hwcap) {
++		mock_hwcap = hwcap;
++	}
++#endif
++
++
++#if CPUINFO_ARCH_LOONGARCH64
++	void cpuinfo_loongarch_linux_hwcap_from_getauxval(
++		uint32_t hwcap[restrict static 1]
++	)
++	{
++		#if CPUINFO_MOCK
++			*hwcap  = mock_hwcap;
++		#else
++			*hwcap  = (uint32_t) getauxval(AT_HWCAP);
++			return ;
++		#endif
++	}
++#endif
+\ No newline at end of file
+diff --git a/src/loongarch/linux/init.c b/src/loongarch/linux/init.c
+new file mode 100644
+index 0000000..408fe70
+--- /dev/null
++++ b/src/loongarch/linux/init.c
+@@ -0,0 +1,602 @@
++#include <stdint.h>
++#include <stddef.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <cpuinfo.h>
++#include <loongarch/linux/api.h>
++#include <loongarch/api.h>
++#include <loongarch/cpucfg.h>
++#include <linux/api.h>
++#include <cpuinfo/internal-api.h>
++#include <cpuinfo/log.h>
++
++
++struct cpuinfo_loongarch_isa cpuinfo_isa = { 0 };
++
++static struct cpuinfo_package package = { { 0 } };
++
++static inline bool bitmask_all(uint32_t bitfield, uint32_t mask) {
++	return (bitfield & mask) == mask;
++}
++
++static inline uint32_t min(uint32_t a, uint32_t b) {
++	return a < b ? a : b;
++}
++
++static inline int cmp(uint32_t a, uint32_t b) {
++	return (a > b) - (a < b);
++}
++
++static bool cluster_siblings_parser(
++	uint32_t processor, uint32_t siblings_start, uint32_t siblings_end,
++	struct cpuinfo_loongarch_linux_processor* processors)
++{
++	processors[processor].flags |= CPUINFO_LINUX_FLAG_PACKAGE_CLUSTER;
++	uint32_t package_leader_id = processors[processor].package_leader_id;
++
++	for (uint32_t sibling = siblings_start; sibling < siblings_end; sibling++) {
++		if (!bitmask_all(processors[sibling].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			cpuinfo_log_info("invalid processor %"PRIu32" reported as a sibling for processor %"PRIu32,
++				sibling, processor);
++			continue;
++		}
++
++		const uint32_t sibling_package_leader_id = processors[sibling].package_leader_id;
++		if (sibling_package_leader_id < package_leader_id) {
++			package_leader_id = sibling_package_leader_id;
++		}
++
++		processors[sibling].package_leader_id = package_leader_id;
++		processors[sibling].flags |= CPUINFO_LINUX_FLAG_PACKAGE_CLUSTER;
++	}
++
++	processors[processor].package_leader_id = package_leader_id;
++
++	return true;
++}
++
++static int cmp_loongarch_linux_processor(const void* ptr_a, const void* ptr_b) {
++	const struct cpuinfo_loongarch_linux_processor* processor_a = (const struct cpuinfo_loongarch_linux_processor*) ptr_a;
++	const struct cpuinfo_loongarch_linux_processor* processor_b = (const struct cpuinfo_loongarch_linux_processor*) ptr_b;
++
++	/* Move usable processors towards the start of the array */
++	const bool usable_a = bitmask_all(processor_a->flags, CPUINFO_LINUX_FLAG_VALID);
++	const bool usable_b = bitmask_all(processor_b->flags, CPUINFO_LINUX_FLAG_VALID);
++	if (usable_a != usable_b) {
++		return (int) usable_b - (int) usable_a;
++	}
++
++	/* Compare based on processsor ID (i.e. processor 0 < processor 1) */
++	const uint32_t pro_a = processor_a->system_processor_id;
++	const uint32_t pro_b = processor_b->system_processor_id;
++
++	return cmp(pro_a,pro_b);
++
++
++}
++
++void cpuinfo_loongarch_linux_init(void) {
++
++	struct cpuinfo_loongarch_linux_processor* loongarch_linux_processors = NULL;
++	struct cpuinfo_processor* processors = NULL;
++	struct cpuinfo_core* cores = NULL;
++	struct cpuinfo_cluster* clusters = NULL;
++	struct cpuinfo_uarch_info* uarchs = NULL;
++	const struct cpuinfo_processor** linux_cpu_to_processor_map = NULL;
++	const struct cpuinfo_core** linux_cpu_to_core_map = NULL;
++	struct cpuinfo_cache* l1i = NULL;
++	struct cpuinfo_cache* l1d = NULL;
++	struct cpuinfo_cache* l2 = NULL;
++	struct cpuinfo_cache* l3 = NULL;
++	uint32_t* linux_cpu_to_uarch_index_map = NULL;
++
++	const uint32_t max_processors_count = cpuinfo_linux_get_max_processors_count();
++	cpuinfo_log_debug("system maximum processors count: %"PRIu32, max_processors_count);
++
++	const uint32_t max_possible_processors_count = 1 +
++		cpuinfo_linux_get_max_possible_processor(max_processors_count);
++	cpuinfo_log_debug("maximum possible processors count: %"PRIu32, max_possible_processors_count);
++	const uint32_t max_present_processors_count = 1 +
++		cpuinfo_linux_get_max_present_processor(max_processors_count);
++	cpuinfo_log_debug("maximum present processors count: %"PRIu32, max_present_processors_count);
++
++	uint32_t valid_processor_mask = 0;
++	uint32_t loongarch_linux_processors_count = max_processors_count;
++	if (max_present_processors_count != 0) {
++		loongarch_linux_processors_count = min(loongarch_linux_processors_count, max_present_processors_count);
++		valid_processor_mask = CPUINFO_LINUX_FLAG_PRESENT;
++	}
++	if (max_possible_processors_count != 0) {
++		loongarch_linux_processors_count = min(loongarch_linux_processors_count, max_possible_processors_count);
++		valid_processor_mask |= CPUINFO_LINUX_FLAG_POSSIBLE;
++	}
++	if ((max_present_processors_count | max_possible_processors_count) == 0) {
++		cpuinfo_log_error("failed to parse both lists of possible and present processors");
++		return;
++	}
++
++	loongarch_linux_processors = calloc(loongarch_linux_processors_count, sizeof(struct cpuinfo_loongarch_linux_processor));
++	if (loongarch_linux_processors == NULL) {
++		cpuinfo_log_error(
++			"failed to allocate %zu bytes for descriptions of %"PRIu32" Loongarch logical processors",
++			loongarch_linux_processors_count * sizeof(struct cpuinfo_loongarch_linux_processor),
++			loongarch_linux_processors_count);
++		return;
++	}
++
++	if (max_possible_processors_count) {
++		cpuinfo_linux_detect_possible_processors(
++			loongarch_linux_processors_count, &loongarch_linux_processors->flags,
++			sizeof(struct cpuinfo_loongarch_linux_processor),
++			CPUINFO_LINUX_FLAG_POSSIBLE);
++	}
++
++	if (max_present_processors_count) {
++		cpuinfo_linux_detect_present_processors(
++			loongarch_linux_processors_count, &loongarch_linux_processors->flags,
++			sizeof(struct cpuinfo_loongarch_linux_processor),
++			CPUINFO_LINUX_FLAG_PRESENT);
++	}
++
++	char proc_cpuinfo_hardware[CPUINFO_HARDWARE_VALUE_MAX];
++
++	if (!cpuinfo_loongarch_linux_parse_proc_cpuinfo(
++			proc_cpuinfo_hardware,
++			loongarch_linux_processors_count,
++			loongarch_linux_processors)) {
++		cpuinfo_log_error("failed to parse processor information from /proc/cpuinfo");
++		return;
++	}
++
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, valid_processor_mask)) {
++			loongarch_linux_processors[i].flags |= CPUINFO_LINUX_FLAG_VALID;
++		}
++	}
++
++
++	uint32_t valid_processors = 0, last_cpucfg = 0;
++
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		loongarch_linux_processors[i].system_processor_id = i;
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			valid_processors += 1;
++
++			if (!(loongarch_linux_processors[i].flags & CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR)) {
++				/*
++				 * Processor is in possible and present lists, but not reported in /proc/cpuinfo.
++				 * This is fairly common: high-index processors can be not reported if they are offline.
++				 */
++				cpuinfo_log_info("processor %"PRIu32" is not listed in /proc/cpuinfo", i);
++			}
++
++			if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LOONGARCH_LINUX_VALID_CPUCFG)) {
++				last_cpucfg = loongarch_linux_processors[i].cpucfg_id;
++			}
++
++		} else {
++			/* Processor reported in /proc/cpuinfo, but not in possible and/or present lists: log and ignore */
++			if (!(loongarch_linux_processors[i].flags & CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR)) {
++				cpuinfo_log_warning("invalid processor %"PRIu32" reported in /proc/cpuinfo", i);
++			}
++		}
++	}
++
++	const struct cpuinfo_loongarch_chipset chipset =
++		cpuinfo_loongarch_linux_decode_chipset(proc_cpuinfo_hardware);
++
++
++	#if CPUINFO_ARCH_LOONGARCH64
++		uint32_t isa_features = 0;
++		cpuinfo_loongarch_linux_hwcap_from_getauxval(&isa_features);
++		cpuinfo_loongarch64_linux_decode_isa_from_proc_cpuinfo(
++			isa_features, &cpuinfo_isa);
++	#endif
++
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			if (cpuinfo_linux_get_processor_package_id(i, &loongarch_linux_processors[i].package_id)) {
++				loongarch_linux_processors[i].flags |= CPUINFO_LINUX_FLAG_PACKAGE_ID;
++			}
++		}
++	}
++
++	/* Initialize topology group IDs */
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		loongarch_linux_processors[i].package_leader_id = i;
++	}
++
++	/* Propagate topology group IDs among siblings */
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (!bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			continue;
++		}
++
++		if (loongarch_linux_processors[i].flags & CPUINFO_LINUX_FLAG_PACKAGE_ID) {
++			cpuinfo_linux_detect_core_siblings(
++				loongarch_linux_processors_count, i,
++				(cpuinfo_siblings_callback) cluster_siblings_parser,
++				loongarch_linux_processors);
++		}
++	}
++
++	/* Propagate all cluster IDs */
++	uint32_t clustered_processors = 0;
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID | CPUINFO_LINUX_FLAG_PACKAGE_CLUSTER)) {
++			clustered_processors += 1;
++
++			const uint32_t package_leader_id = loongarch_linux_processors[i].package_leader_id;
++			if (package_leader_id < i) {
++				loongarch_linux_processors[i].package_leader_id = loongarch_linux_processors[package_leader_id].package_leader_id;
++			}
++
++			cpuinfo_log_debug("processor %"PRIu32" clustered with processor %"PRIu32" as inferred from system siblings lists",
++				i, loongarch_linux_processors[i].package_leader_id);
++		}
++	}
++
++	cpuinfo_loongarch_linux_count_cluster_processors(loongarch_linux_processors_count, loongarch_linux_processors);
++
++	const uint32_t cluster_count = cpuinfo_loongarch_linux_detect_cluster_cpucfg(
++		&chipset,
++		loongarch_linux_processors_count, valid_processors, loongarch_linux_processors);
++
++	/* Initialize core vendor, uarch, and cpucfg for every logical processor */
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			const uint32_t cluster_leader = loongarch_linux_processors[i].package_leader_id;
++			if (cluster_leader == i) {
++				/* Cluster leader: decode core vendor and uarch */
++				cpuinfo_loongarch_decode_vendor_uarch(
++				loongarch_linux_processors[cluster_leader].cpucfg_id,
++				&loongarch_linux_processors[cluster_leader].vendor,
++				&loongarch_linux_processors[cluster_leader].uarch);
++			} else {
++				/* Cluster non-leader: copy vendor, uarch, and cpucfg from cluster leader */
++				loongarch_linux_processors[i].flags = loongarch_linux_processors[cluster_leader].flags;
++				loongarch_linux_processors[i].cpucfg_id = loongarch_linux_processors[cluster_leader].cpucfg_id;
++				loongarch_linux_processors[i].vendor = loongarch_linux_processors[cluster_leader].vendor;
++				loongarch_linux_processors[i].uarch = loongarch_linux_processors[cluster_leader].uarch;
++			}
++		}
++	}
++
++
++	qsort(loongarch_linux_processors, loongarch_linux_processors_count,
++		sizeof(struct cpuinfo_loongarch_linux_processor), cmp_loongarch_linux_processor);
++
++
++	uint32_t uarchs_count = 0;
++	enum cpuinfo_uarch last_uarch;
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			if (uarchs_count == 0 || loongarch_linux_processors[i].uarch != last_uarch) {
++				last_uarch = loongarch_linux_processors[i].uarch;
++				uarchs_count += 1;
++			}
++			loongarch_linux_processors[i].uarch_index = uarchs_count - 1;
++		}
++	}
++
++	/*
++	 * Assumptions:
++	 * - No SMP (i.e. each core supports only one hardware thread).
++	 * - Level 1 instruction and data caches are private to the core clusters.
++	 * - Level 2 and level 3 cache is shared between cores in the same cluster.
++	 */
++	cpuinfo_loongarch_chipset_to_string(&chipset, package.name);
++
++	package.processor_count = valid_processors;
++	package.core_count = valid_processors;
++	package.cluster_count = cluster_count;
++
++	processors = calloc(valid_processors, sizeof(struct cpuinfo_processor));
++	if (processors == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" logical processors",
++			valid_processors * sizeof(struct cpuinfo_processor), valid_processors);
++		goto cleanup;
++	}
++
++	cores = calloc(valid_processors, sizeof(struct cpuinfo_core));
++	if (cores == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" cores",
++			valid_processors * sizeof(struct cpuinfo_core), valid_processors);
++		goto cleanup;
++	}
++
++	clusters = calloc(cluster_count, sizeof(struct cpuinfo_cluster));
++	if (clusters == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" core clusters",
++			cluster_count * sizeof(struct cpuinfo_cluster), cluster_count);
++		goto cleanup;
++	}
++
++	uarchs = calloc(uarchs_count, sizeof(struct cpuinfo_uarch_info));
++	if (uarchs == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" microarchitectures",
++			uarchs_count * sizeof(struct cpuinfo_uarch_info), uarchs_count);
++		goto cleanup;
++	}
++
++	linux_cpu_to_processor_map = calloc(loongarch_linux_processors_count, sizeof(struct cpuinfo_processor*));
++	if (linux_cpu_to_processor_map == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for %"PRIu32" logical processor mapping entries",
++			loongarch_linux_processors_count * sizeof(struct cpuinfo_processor*), loongarch_linux_processors_count);
++		goto cleanup;
++	}
++
++	linux_cpu_to_core_map = calloc(loongarch_linux_processors_count, sizeof(struct cpuinfo_core*));
++	if (linux_cpu_to_core_map == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for %"PRIu32" core mapping entries",
++			loongarch_linux_processors_count * sizeof(struct cpuinfo_core*), loongarch_linux_processors_count);
++		goto cleanup;
++	}
++
++	if (uarchs_count > 1) {
++		linux_cpu_to_uarch_index_map = calloc(loongarch_linux_processors_count, sizeof(uint32_t));
++		if (linux_cpu_to_uarch_index_map == NULL) {
++			cpuinfo_log_error("failed to allocate %zu bytes for %"PRIu32" uarch index mapping entries",
++				loongarch_linux_processors_count * sizeof(uint32_t), loongarch_linux_processors_count);
++			goto cleanup;
++		}
++	}
++
++	l1i = calloc(valid_processors, sizeof(struct cpuinfo_cache));
++	if (l1i == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" L1I caches",
++			valid_processors * sizeof(struct cpuinfo_cache), valid_processors);
++		goto cleanup;
++	}
++
++	l1d = calloc(valid_processors, sizeof(struct cpuinfo_cache));
++	if (l1d == NULL) {
++		cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" L1D caches",
++			valid_processors * sizeof(struct cpuinfo_cache), valid_processors);
++		goto cleanup;
++	}
++
++	uint32_t uarchs_index = 0;
++	for (uint32_t i = 0; i < loongarch_linux_processors_count; i++) {
++		if (bitmask_all(loongarch_linux_processors[i].flags, CPUINFO_LINUX_FLAG_VALID)) {
++			if (uarchs_index == 0 || loongarch_linux_processors[i].uarch != last_uarch) {
++				last_uarch = loongarch_linux_processors[i].uarch;
++				uarchs[uarchs_index] = (struct cpuinfo_uarch_info) {
++					.uarch = loongarch_linux_processors[i].uarch,
++				};
++				uarchs_index += 1;
++			}
++			uarchs[uarchs_index - 1].processor_count += 1;
++			uarchs[uarchs_index - 1].core_count += 1;
++		}
++	}
++
++
++	uint32_t l2_count = 0, l3_count = 0, big_l3_size = 0, cluster_id = UINT32_MAX;
++	/* Indication whether L3 (if it exists) is shared between all cores */
++	bool shared_l3 = true;
++	/* Populate cache information structures in l1i, l1d */
++	for (uint32_t i = 0; i < valid_processors; i++) {
++		if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++			cluster_id += 1;
++			clusters[cluster_id] = (struct cpuinfo_cluster) {
++				.processor_start = i,
++				.processor_count = loongarch_linux_processors[i].package_processor_count,
++				.core_start = i,
++				.core_count = loongarch_linux_processors[i].package_processor_count,
++				.cluster_id = cluster_id,
++				.package = &package,
++				.vendor = loongarch_linux_processors[i].vendor,
++				.uarch = loongarch_linux_processors[i].uarch,
++			};
++		}
++
++		processors[i].smt_id = 0;
++		processors[i].core = cores + i;
++		processors[i].cluster = clusters + cluster_id;
++		processors[i].package = &package;
++		processors[i].linux_id = (int) loongarch_linux_processors[i].system_processor_id;
++		processors[i].cache.l1i = l1i + i;
++		processors[i].cache.l1d = l1d + i;
++		linux_cpu_to_processor_map[loongarch_linux_processors[i].system_processor_id] = &processors[i];
++
++		cores[i].processor_start = i;
++		cores[i].processor_count = 1;
++		cores[i].core_id = i;
++		cores[i].cluster = clusters + cluster_id;
++		cores[i].package = &package;
++		cores[i].vendor = loongarch_linux_processors[i].vendor;
++		cores[i].uarch = loongarch_linux_processors[i].uarch;
++		cores[i].cpucfg = loongarch_linux_processors[i].cpucfg_id;
++		linux_cpu_to_core_map[loongarch_linux_processors[i].system_processor_id] = &cores[i];
++
++		if (linux_cpu_to_uarch_index_map != NULL) {
++			linux_cpu_to_uarch_index_map[loongarch_linux_processors[i].system_processor_id] =
++				loongarch_linux_processors[i].uarch_index;
++		}
++
++		struct cpuinfo_cache temp_l2 = { 0 }, temp_l3 = { 0 };
++		cpuinfo_loongarch_decode_cache(
++			loongarch_linux_processors[i].uarch,
++			loongarch_linux_processors[i].package_processor_count,
++			loongarch_linux_processors[i].architecture_version,
++			&l1i[i], &l1d[i], &temp_l2, &temp_l3);
++		l1i[i].processor_start = l1d[i].processor_start = i;
++		l1i[i].processor_count = l1d[i].processor_count = 1;
++
++
++		if (temp_l3.size != 0) {
++			/*
++			 * Assumptions:
++			 * - L2 is private to each core
++			 * - L3 is shared by cores in the same cluster
++			 * - If cores in different clusters report the same L3, it is shared between all cores.
++			 */
++			l2_count += 1;
++			if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++				if (cluster_id == 0) {
++					big_l3_size = temp_l3.size;
++					l3_count = 1;
++				} else if (temp_l3.size != big_l3_size) {
++					/* If some cores have different L3 size, L3 is not shared between all cores */
++					shared_l3 = false;
++					l3_count += 1;
++				}
++			}
++		} else {
++			/* If some cores don't have L3 cache, L3 is not shared between all cores */
++			shared_l3 = false;
++			if (temp_l2.size != 0) {
++				/* Assume L2 is shared by cores in the same cluster */
++				if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++					l2_count += 1;
++				}
++			}
++		}
++	}
++
++	if (l2_count != 0) {
++		l2 = calloc(l2_count, sizeof(struct cpuinfo_cache));
++		if (l2 == NULL) {
++			cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" L2 caches",
++				l2_count * sizeof(struct cpuinfo_cache), l2_count);
++			goto cleanup;
++		}
++
++		if (l3_count != 0) {
++			l3 = calloc(l3_count, sizeof(struct cpuinfo_cache));
++			if (l3 == NULL) {
++				cpuinfo_log_error("failed to allocate %zu bytes for descriptions of %"PRIu32" L3 caches",
++					l3_count * sizeof(struct cpuinfo_cache), l3_count);
++				goto cleanup;
++			}
++		}
++	}
++
++	cluster_id = UINT32_MAX;
++	uint32_t l2_index = UINT32_MAX, l3_index = UINT32_MAX;
++	for (uint32_t i = 0; i < valid_processors; i++) {
++		if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++			cluster_id++;
++		}
++
++		struct cpuinfo_cache dummy_l1i, dummy_l1d, temp_l2 = { 0 }, temp_l3 = { 0 };
++		cpuinfo_loongarch_decode_cache(
++			loongarch_linux_processors[i].uarch,
++			loongarch_linux_processors[i].package_processor_count,
++			loongarch_linux_processors[i].architecture_version,
++			&dummy_l1i, &dummy_l1d, &temp_l2, &temp_l3);
++
++		if (temp_l3.size != 0) {
++			/*
++			 * Assumptions:
++			 * - L2 is private to each core
++			 * - L3 is shared by cores in the same cluster
++			 * - If cores in different clusters report the same L3, it is shared between all cores.
++			 */
++			l2_index += 1;
++			l2[l2_index] = (struct cpuinfo_cache) {
++				.size            = temp_l2.size,
++				.associativity   = temp_l2.associativity,
++				.sets            = temp_l2.sets,
++				.partitions      = 1,
++				.line_size       = temp_l2.line_size,
++				.flags           = temp_l2.flags,
++				.processor_start = i,
++				.processor_count = 1,
++			};
++			processors[i].cache.l2 = l2 + l2_index;
++			if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++				l3_index += 1;
++				if (l3_index < l3_count) {
++					l3[l3_index] = (struct cpuinfo_cache) {
++						.size            = temp_l3.size,
++						.associativity   = temp_l3.associativity,
++						.sets            = temp_l3.sets,
++						.partitions      = 1,
++						.line_size       = temp_l3.line_size,
++						.flags           = temp_l3.flags,
++						.processor_start = i,
++						.processor_count =
++							shared_l3 ? valid_processors : loongarch_linux_processors[i].package_processor_count,
++					};
++				}
++			}
++			if (shared_l3) {
++				processors[i].cache.l3 = l3;
++			} else if (l3_index < l3_count) {
++				processors[i].cache.l3 = l3 + l3_index;
++			}
++		} else if (temp_l2.size != 0) {
++			/* Assume L2 is shared by cores in the same cluster */
++			if (loongarch_linux_processors[i].package_leader_id == loongarch_linux_processors[i].system_processor_id) {
++				l2_index += 1;
++				l2[l2_index] = (struct cpuinfo_cache) {
++					.size            = temp_l2.size,
++					.associativity   = temp_l2.associativity,
++					.sets            = temp_l2.sets,
++					.partitions      = 1,
++					.line_size       = temp_l2.line_size,
++					.flags           = temp_l2.flags,
++					.processor_start = i,
++					.processor_count = loongarch_linux_processors[i].package_processor_count,
++				};
++			}
++			processors[i].cache.l2 = l2 + l2_index;
++		}
++	}
++
++	/* Commit */
++	cpuinfo_processors = processors;
++	cpuinfo_cores = cores;
++	cpuinfo_clusters = clusters;
++	cpuinfo_packages = &package;
++	cpuinfo_uarchs = uarchs;
++	cpuinfo_cache[cpuinfo_cache_level_1i] = l1i;
++	cpuinfo_cache[cpuinfo_cache_level_1d] = l1d;
++	cpuinfo_cache[cpuinfo_cache_level_2]  = l2;
++	cpuinfo_cache[cpuinfo_cache_level_3]  = l3;
++
++	cpuinfo_processors_count = valid_processors;
++	cpuinfo_cores_count = valid_processors;
++	cpuinfo_clusters_count = cluster_count;
++	cpuinfo_packages_count = 1;
++	cpuinfo_uarchs_count = uarchs_count;
++	cpuinfo_cache_count[cpuinfo_cache_level_1i] = valid_processors;
++	cpuinfo_cache_count[cpuinfo_cache_level_1d] = valid_processors;
++	cpuinfo_cache_count[cpuinfo_cache_level_2]  = l2_count;
++	cpuinfo_cache_count[cpuinfo_cache_level_3]  = l3_count;
++	cpuinfo_max_cache_size = cpuinfo_loongarch_compute_max_cache_size(&processors[0]);
++
++	cpuinfo_linux_cpu_max = loongarch_linux_processors_count;
++	cpuinfo_linux_cpu_to_processor_map = linux_cpu_to_processor_map;
++	cpuinfo_linux_cpu_to_core_map = linux_cpu_to_core_map;
++	cpuinfo_linux_cpu_to_uarch_index_map = linux_cpu_to_uarch_index_map;
++
++	__sync_synchronize();
++	cpuinfo_is_initialized = true;
++
++	processors = NULL;
++	cores = NULL;
++	clusters = NULL;
++	uarchs = NULL;
++	l1i = l1d = l2 = l3 = NULL;
++	linux_cpu_to_processor_map = NULL;
++	linux_cpu_to_core_map = NULL;
++	linux_cpu_to_uarch_index_map = NULL;
++
++cleanup:
++	free(loongarch_linux_processors);
++	free(processors);
++	free(cores);
++	free(clusters);
++	free(uarchs);
++	free(l1i);
++	free(l1d);
++	free(l2);
++	free(l3);
++	free(linux_cpu_to_processor_map);
++	free(linux_cpu_to_core_map);
++	free(linux_cpu_to_uarch_index_map);
++}
+\ No newline at end of file
+diff --git a/src/loongarch/linux/loongarch64-isa.c b/src/loongarch/linux/loongarch64-isa.c
+new file mode 100644
+index 0000000..f2a492b
+--- /dev/null
++++ b/src/loongarch/linux/loongarch64-isa.c
+@@ -0,0 +1,50 @@
++#include <stdint.h>
++
++#include <loongarch/linux/api.h>
++#include <cpuinfo/log.h>
++
++
++void cpuinfo_loongarch64_linux_decode_isa_from_proc_cpuinfo(
++	uint32_t features,
++	struct cpuinfo_loongarch_isa isa[restrict static 1])
++{
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_CPUCFG) {
++		isa->cpucfg = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LAM) {
++		isa->lam = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_UAL) {
++		isa->ual = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_FPU) {
++		isa->fpu = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LSX) {
++		isa->lsx = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LASX) {
++		isa->lasx = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_CRC32) {
++		isa->crc32 = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_COMPLEX) {
++		isa->complex = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_CRYPTO) {
++		isa->crypto = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LVZ) {
++		isa->lvz = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_X86) {
++		isa->lbt_x86 = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_ARM) {
++		isa->lbt_arm = true;
++	}
++	if (features & CPUINFO_LOONGARCH_LINUX_FEATURE_LBT_MIPS) {
++		isa->lbt_mips = true;
++	}
++}
+\ No newline at end of file
+diff --git a/src/loongarch/uarch.c b/src/loongarch/uarch.c
+new file mode 100644
+index 0000000..fc718b8
+--- /dev/null
++++ b/src/loongarch/uarch.c
+@@ -0,0 +1,28 @@
++#include <stdint.h>
++
++#include <loongarch/api.h>
++#include <loongarch/cpucfg.h>
++#include <cpuinfo/log.h>
++
++
++void cpuinfo_loongarch_decode_vendor_uarch(
++	uint32_t cpucfg,
++	enum cpuinfo_vendor vendor[restrict static 1],
++	enum cpuinfo_uarch uarch[restrict static 1])
++{
++
++	switch (cpucfg_get_companyID(cpucfg)) {
++		case 0x14:
++			*vendor = cpuinfo_vendor_loongson;
++			switch(cpucfg_get_processorID(cpucfg)){
++				case 0xc0:
++					*uarch = cpuinfo_uarch_LA464;
++					break;
++			}
++			break;
++		default:
++			//not match verify vendor and uarch
++			*vendor = cpuinfo_vendor_unknown;
++			*uarch = cpuinfo_uarch_unknown;
++	}
++}
+\ No newline at end of file
+diff --git a/tools/cpu-info.c b/tools/cpu-info.c
+index b0fec24..f5781f3 100644
+--- a/tools/cpu-info.c
++++ b/tools/cpu-info.c
+@@ -41,6 +41,8 @@ static const char* vendor_to_string(enum cpuinfo_vendor vendor) {
+ 			return "Broadcom";
+ 		case cpuinfo_vendor_apm:
+ 			return "Applied Micro";
++		case cpuinfo_vendor_loongson:
++			return "Loongson";
+ 		default:
+ 			return NULL;
+ 	}
+@@ -282,6 +284,8 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
+ 			return "Dhyana";
+ 		case cpuinfo_uarch_taishan_v110:
+ 			return "TaiShan v110";
++		case cpuinfo_uarch_LA464:
++			return "LA464";
+ 		default:
+ 			return NULL;
+ 	}
+diff --git a/tools/isa-info.c b/tools/isa-info.c
+index 2c40a5e..841cec7 100644
+--- a/tools/isa-info.c
++++ b/tools/isa-info.c
+@@ -192,4 +192,26 @@ int main(int argc, char** argv) {
+ 	printf("\tCompressed: %s\n", cpuinfo_has_riscv_c() ? "yes" : "no");
+ 	printf("\tVector: %s\n", cpuinfo_has_riscv_v() ? "yes" : "no");
+ #endif
++#if CPUINFO_ARCH_LOONGARCH64
++	printf("Loongarch:\n");
++	printf("\tCPUCFG: %s\n", cpuinfo_has_loongarch_cpucfg() ? "yes" : "no");
++	printf("\tLAM: %s\n", cpuinfo_has_loongarch_lam() ? "yes" : "no");
++	printf("\tUAL: %s\n", cpuinfo_has_loongarch_ual() ? "yes" : "no");
++	printf("\tCOMPLEX: %s\n", cpuinfo_has_loongarch_complex() ? "yes" : "no");
++	printf("\tLVZ: %s\n", cpuinfo_has_loongarch_lvz() ? "yes" : "no");
++	printf("\tLBT_X86: %s\n", cpuinfo_has_loongarch_lbt_x86() ? "yes" : "no");
++	printf("\tLBT_arm: %s\n", cpuinfo_has_loongarch_lbt_arm() ? "yes" : "no");
++	printf("\tLBT_mips: %s\n", cpuinfo_has_loongarch_lbt_mips() ? "yes" : "no");
++
++	printf("Scalar instructions:\n");
++	printf("\tFPU: %s\n", cpuinfo_has_loongarch_fpu() ? "yes" : "no");
++
++	printf("SIMD extensions:\n");
++	printf("\tLSX: %s\n", cpuinfo_has_loongarch_lsx() ? "yes" : "no");
++	printf("\tLASX: %s\n", cpuinfo_has_loongarch_lasx() ? "yes" : "no");
++
++	printf("Cryptography extensions:\n");
++	printf("\tCRYPTO: %s\n", cpuinfo_has_loongarch_crypto() ? "yes" : "no");
++	printf("\tCRC32: %s\n", cpuinfo_has_loongarch_crc32() ? "yes" : "no");
++#endif
+ }
+
