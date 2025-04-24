@@ -91,6 +91,20 @@ jobs:
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
 
+      - name: Restore Cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/data/cache
+          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: ${{ matrix.package }}-${{ matrix.platform }}-
+
+      - name: Setup Cache
+        run: |
+          sudo mkdir -p /home/runner/data/cache/.cache
+          sudo chown -R root:docker /home/runner/data/cache
+
       - name: Build wheels
         uses: loong64/cibuildwheel@v2.23.2
         env:
@@ -99,12 +113,28 @@ jobs:
           CIBW_BUILD: ${{ matrix.platform }}
           CIBW_TEST_SKIP: "*"
           CIBW_BEFORE_ALL_LINUX: >
-            yum install -y atlas-devel blas-devel lapack-devel libomp-devel openblas-devel zstd
+            yum install -y atlas-devel blas-devel ccache lapack-devel libomp-devel openblas-devel zstd
           CIBW_ENVIRONMENT_LINUX: >
             BUILD_TEST=0
             PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
             PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
             PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
+            USE_CCACHE=1
+            PATH="/usr/lib64/ccache:$HOME/.cargo/bin:$PATH"
+            CCACHE_DIR="/host/home/runner/data/cache/ccache"
+
+      - name: Cache permissions
+        if: always()
+        run: |
+          sudo chown -R runner:docker /home/runner/data/cache
+
+      - name: Save Cache
+        if: always()
+        id: cache-save
+        uses: actions/cache/save@v4
+        with:
+          path: /home/runner/data/cache
+          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Upload wheels
         run: |
