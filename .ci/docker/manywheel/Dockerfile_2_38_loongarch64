@@ -1,0 +1,57 @@
+FROM ghcr.io/loong64/manylinux_2_38_loongarch64 AS base
+
+# Language variabes
+ENV LC_ALL=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US.UTF-8
+
+# Installed needed OS packages. This is to support all
+# the binary builds (torch, vision, audio, text, data)
+RUN yum install -y \
+        autoconf \
+        automake \
+        bison \
+        bzip2 \
+        curl \
+        diffutils \
+        file \
+        git \
+        less \
+        libffi-devel \
+        libgomp \
+        make \
+        openssl-devel \
+        patch \
+        perl \
+        unzip \
+        util-linux \
+        wget \
+        which \
+        xz \
+        yasm \
+        zstd \
+        sudo \
+        blas-devel \
+        openblas-devel \
+        lapack-devel \
+        atlas-devel \
+        libjpeg-devel \
+        libxslt-devel \
+        libxml2-devel \
+        openssl-devel \
+    && \
+    yum clean all
+
+# git236+ would refuse to run git commands in repos owned by other users
+# Which causes version check to fail, as pytorch repo is bind-mounted into the image
+# Override this behaviour by treating every folder as safe
+# For more details see https://github.com/pytorch/pytorch/issues/78659#issuecomment-1144107327
+RUN git config --global --add safe.directory "*"
+
+# Install ffmpeg
+ADD ./common/install_ffmpeg.sh install_ffmpeg.sh
+RUN bash ./install_ffmpeg.sh && rm install_ffmpeg.sh
+
+ADD ./repair_manylinux_2_38.sh /usr/local/bin/repair_manylinux_2_38.sh
+
+FROM base AS final
