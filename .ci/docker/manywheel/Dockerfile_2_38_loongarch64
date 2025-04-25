@@ -55,3 +55,5 @@ RUN bash ./install_ffmpeg.sh && rm install_ffmpeg.sh
 ADD ./repair_manylinux_2_38.sh /usr/local/bin/repair_manylinux_2_38.sh
 
 FROM base AS final
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
