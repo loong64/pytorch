@@ -130,8 +130,8 @@ jobs:
               if [[ ! -e $pkg ]]; then
                 continue
               fi
-            abs_pkg=$(realpath $pkg)
-            python /opt/embed_library.py ${abs_pkg}
+              abs_pkg=$(realpath $pkg)
+              python /opt/embed_library.py ${abs_pkg}
             done
           CIBW_TEST_SKIP: "*"
 
