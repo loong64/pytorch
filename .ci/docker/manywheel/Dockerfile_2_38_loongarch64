@@ -58,7 +58,6 @@ RUN git config --global --add safe.directory "*"
 ADD ./common/install_ffmpeg.sh install_ffmpeg.sh
 RUN bash ./install_ffmpeg.sh && rm install_ffmpeg.sh
 
-ADD embed_library.py /opt/embed_library.py
 ADD repair_manylinux_2_38.sh /usr/local/bin/repair_manylinux_2_38.sh
 
 FROM base AS final

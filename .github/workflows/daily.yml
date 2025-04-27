@@ -113,7 +113,7 @@ jobs:
           CIBW_BUILD: ${{ matrix.platform }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_BEFORE_ALL_LINUX: >
-            yum install -y ccache libomp-devel
+            yum install -y ccache
           CIBW_BEFORE_BUILD: >
             pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
           CIBW_ENVIRONMENT_LINUX: >
@@ -122,17 +122,8 @@ jobs:
             PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
             PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
             USE_CCACHE=1
-            PATH="/usr/lib64/ccache:$HOME/.cargo/bin:$PATH"
+            PATH="/usr/lib64/ccache:$PATH"
             CCACHE_DIR="/host/home/runner/data/cache/ccache"
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
-            auditwheel repair -w {dest_dir} {wheel}
-            for pkg in {dest_dir}/*.whl; do 
-              if [[ ! -e $pkg ]]; then
-                continue
-              fi
-              abs_pkg=$(realpath $pkg)
-              python /opt/embed_library.py ${abs_pkg}
-            done
           CIBW_TEST_SKIP: "*"
 
       - name: Cache permissions

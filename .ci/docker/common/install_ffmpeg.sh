@@ -4,8 +4,8 @@ set -ex
 
 FFMPEG_VERSION=4.2
 
-command -v apk >/dev/null && apk add libjpeg-dev libwebp-dev libpng-dev freetype gnutls wget
-command -v yum >/dev/null && yum install -y libjpeg-devel libwebp-devel libpng-devel freetype gnutls wget
+command -v apk >/dev/null && apk add --no-cache libjpeg-dev libwebp-dev libpng-dev freetype gnutls wget
+command -v yum >/dev/null && yum install -y libjpeg-devel libwebp-devel libpng-devel freetype gnutls wget && yum clean all
 
 cd /tmp
 
