@@ -54,7 +54,7 @@ RUN rm install_ninja.sh
 # For more details see https://github.com/pytorch/pytorch/issues/78659#issuecomment-1144107327
 RUN git config --global --add safe.directory "*"
 
-# Install ffmpeg
+FROM base AS ffmpeg
 ADD ./common/install_ffmpeg.sh install_ffmpeg.sh
 RUN bash ./install_ffmpeg.sh && rm install_ffmpeg.sh
 
@@ -62,4 +62,5 @@ ADD repair_manylinux_2_38.sh /usr/local/bin/repair_manylinux_2_38.sh
 
 FROM base AS final
 
+COPY --from=ffmpeg /usr/local /usr/local
 ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
