@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index bd9f77f..00df890 100644
+index aedc983..bf555cf 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -95,7 +95,7 @@ IF(NOT CMAKE_SYSTEM_PROCESSOR)
@@ -11,7 +11,7 @@ index bd9f77f..00df890 100644
    MESSAGE(WARNING
      "Target processor architecture \"${CPUINFO_TARGET_PROCESSOR}\" is not supported in cpuinfo. "
      "cpuinfo will compile, but cpuinfo_initialize() will always fail.")
-@@ -224,6 +224,20 @@ IF(CPUINFO_SUPPORTED_PLATFORM)
+@@ -225,6 +225,20 @@ IF(CPUINFO_SUPPORTED_PLATFORM)
  	src/riscv/linux/riscv-hw.c
  	src/riscv/linux/riscv-isa.c)
      ENDIF()
@@ -71,7 +71,7 @@ index 7bb6d1e..cfba105 100644
  
  #if defined(__ANDROID__)
 diff --git a/include/cpuinfo.h b/include/cpuinfo.h
-index 387611c..dbdb029 100644
+index f1d35d4..5b44a37 100644
 --- a/include/cpuinfo.h
 +++ b/include/cpuinfo.h
 @@ -54,6 +54,10 @@
@@ -107,7 +107,7 @@ index 387611c..dbdb029 100644
  };
  
  /**
-@@ -599,6 +611,9 @@ enum cpuinfo_uarch {
+@@ -603,6 +615,9 @@ enum cpuinfo_uarch {
  
  	/** HiSilicon TaiShan v110 (Huawei Kunpeng 920 series processors). */
  	cpuinfo_uarch_taishan_v110 = 0x00C00100,
@@ -117,7 +117,7 @@ index 387611c..dbdb029 100644
  };
  
  struct cpuinfo_processor {
-@@ -633,6 +648,10 @@ struct cpuinfo_processor {
+@@ -637,6 +652,10 @@ struct cpuinfo_processor {
  #if CPUINFO_ARCH_X86 || CPUINFO_ARCH_X86_64
  	/** APIC ID (unique x86-specific ID of the logical processor) */
  	uint32_t apic_id;
@@ -128,7 +128,7 @@ index 387611c..dbdb029 100644
  #endif
  	struct {
  		/** Level 1 instruction cache */
-@@ -669,6 +688,9 @@ struct cpuinfo_core {
+@@ -673,6 +692,9 @@ struct cpuinfo_core {
  #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
  	/** Value of Main ID Register (MIDR) for this core */
  	uint32_t midr;
@@ -138,7 +138,7 @@ index 387611c..dbdb029 100644
  #endif
  	/** Clock rate (non-Turbo) of the core, in Hz */
  	uint64_t frequency;
-@@ -697,6 +719,9 @@ struct cpuinfo_cluster {
+@@ -701,6 +723,9 @@ struct cpuinfo_cluster {
  #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
  	/** Value of Main ID Register (MIDR) of the cores in the cluster */
  	uint32_t midr;
@@ -148,7 +148,7 @@ index 387611c..dbdb029 100644
  #endif
  	/** Clock rate (non-Turbo) of the cores in the cluster, in Hz */
  	uint64_t frequency;
-@@ -730,6 +755,9 @@ struct cpuinfo_uarch_info {
+@@ -734,6 +759,9 @@ struct cpuinfo_uarch_info {
  #elif CPUINFO_ARCH_ARM || CPUINFO_ARCH_ARM64
  	/** Value of Main ID Register (MIDR) for the microarchitecture */
  	uint32_t midr;
@@ -158,7 +158,7 @@ index 387611c..dbdb029 100644
  #endif
  	/** Number of logical processors with the microarchitecture */
  	uint32_t processor_count;
-@@ -2216,6 +2244,132 @@ static inline bool cpuinfo_has_riscv_v(void) {
+@@ -2248,6 +2276,132 @@ static inline bool cpuinfo_has_riscv_v(void) {
  #endif
  }
  
@@ -292,10 +292,15 @@ index 387611c..dbdb029 100644
  const struct cpuinfo_core* CPUINFO_ABI cpuinfo_get_cores(void);
  const struct cpuinfo_cluster* CPUINFO_ABI cpuinfo_get_clusters(void);
 diff --git a/src/api.c b/src/api.c
-index b8c999f..ec60d9a 100644
+index b8c999f..40906a5 100644
 --- a/src/api.c
 +++ b/src/api.c
-@@ -30,7 +30,7 @@ uint32_t cpuinfo_packages_count = 0;
+@@ -1,3 +1,4 @@
++#define _GNU_SOURCE
+ #include <stdbool.h>
+ #include <stddef.h>
+ 
+@@ -30,7 +31,7 @@ uint32_t cpuinfo_packages_count = 0;
  uint32_t cpuinfo_cache_count[cpuinfo_cache_level_max] = {0};
  uint32_t cpuinfo_max_cache_size = 0;
  
@@ -304,7 +309,7 @@ index b8c999f..ec60d9a 100644
  struct cpuinfo_uarch_info* cpuinfo_uarchs = NULL;
  uint32_t cpuinfo_uarchs_count = 0;
  #else
-@@ -41,7 +41,7 @@ struct cpuinfo_uarch_info cpuinfo_global_uarch = {cpuinfo_uarch_unknown};
+@@ -41,7 +42,7 @@ struct cpuinfo_uarch_info cpuinfo_global_uarch = {cpuinfo_uarch_unknown};
  uint32_t cpuinfo_linux_cpu_max = 0;
  const struct cpuinfo_processor** cpuinfo_linux_cpu_to_processor_map = NULL;
  const struct cpuinfo_core** cpuinfo_linux_cpu_to_core_map = NULL;
@@ -313,7 +318,7 @@ index b8c999f..ec60d9a 100644
  const uint32_t* cpuinfo_linux_cpu_to_uarch_index_map = NULL;
  #endif
  #endif
-@@ -78,7 +78,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarchs() {
+@@ -78,7 +79,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarchs() {
  	if (!cpuinfo_is_initialized) {
  		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarchs");
  	}
@@ -322,7 +327,7 @@ index b8c999f..ec60d9a 100644
  	return cpuinfo_uarchs;
  #else
  	return &cpuinfo_global_uarch;
-@@ -129,7 +129,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarch(uint32_t index) {
+@@ -129,7 +130,7 @@ const struct cpuinfo_uarch_info* cpuinfo_get_uarch(uint32_t index) {
  	if (!cpuinfo_is_initialized) {
  		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarch");
  	}
@@ -331,7 +336,7 @@ index b8c999f..ec60d9a 100644
  	if CPUINFO_UNLIKELY (index >= cpuinfo_uarchs_count) {
  		return NULL;
  	}
-@@ -174,7 +174,7 @@ uint32_t cpuinfo_get_uarchs_count(void) {
+@@ -174,7 +175,7 @@ uint32_t cpuinfo_get_uarchs_count(void) {
  	if (!cpuinfo_is_initialized) {
  		cpuinfo_log_fatal("cpuinfo_get_%s called before cpuinfo is initialized", "uarchs_count");
  	}
@@ -476,7 +481,7 @@ index 0000000..06f87b8
 \ No newline at end of file
 diff --git a/src/loongarch/cache.c b/src/loongarch/cache.c
 new file mode 100644
-index 0000000..acdf106
+index 0000000..b6c921d
 --- /dev/null
 +++ b/src/loongarch/cache.c
 @@ -0,0 +1,135 @@
@@ -546,7 +551,7 @@ index 0000000..acdf106
 +			*l3 = (struct cpuinfo_cache) {
 +				.size = 16 * 1024 * 1024,
 +				.associativity = 16,
-+				.line_size = 64 
++				.line_size = 64
 +			};
 +		default:
 +			cpuinfo_log_warning("loongarch uarch not recognized; using generic cache parameters");
@@ -1342,7 +1347,7 @@ index 0000000..5e113f2
 \ No newline at end of file
 diff --git a/src/loongarch/linux/cpuinfo.c b/src/loongarch/linux/cpuinfo.c
 new file mode 100644
-index 0000000..92fdfcd
+index 0000000..a9b995b
 --- /dev/null
 +++ b/src/loongarch/linux/cpuinfo.c
 @@ -0,0 +1,566 @@
@@ -1471,7 +1476,7 @@ index 0000000..92fdfcd
 +				} else {
 +					goto unexpected;
 +				}
-+ 				break;
++				break;
 +			case 6:
 +				if (memcmp(feature_start, "crypto", feature_length) == 0) {
 +					#if CPUINFO_ARCH_LOONGARCH64
@@ -1558,7 +1563,7 @@ index 0000000..92fdfcd
 +	const char* model_name_end,
 +	char* hardware,
 +	struct cpuinfo_loongarch_linux_processor processor[restrict static 1])
-+{	
++{
 +	const char* separator = model_name_start;
 +	for (; separator != model_name_end; separator++) {
 +		if (*separator == '-') {
@@ -1601,7 +1606,7 @@ index 0000000..92fdfcd
 +		cpucfg_companyID = 0x14;
 +		processor->cpucfg_id = cpucfg_set_companyID(processor->cpucfg_id, cpucfg_companyID);
 +		processor->flags |= CPUINFO_LOONGARCH_LINUX_VALID_COMPANYID | CPUINFO_LOONGARCH_LINUX_VALID_PROCESSOR;
-+	}else{
++	} else {
 +		cpuinfo_log_warning("Model %.*s in /proc/cpuinfo is ignored due to unexpected words",
 +			(int) model_length, model_name_start);
 +		return;
@@ -1856,7 +1861,7 @@ index 0000000..92fdfcd
 +			} else {
 +				goto unknown;
 +			}
-+			break;		
++			break;
 +		case 11:
 +			if (memcmp(line_start, "system type", key_length) == 0) {
 +				/* system type is presently useless, don't parse */
@@ -2666,7 +2671,7 @@ index 0000000..fc718b8
 +}
 \ No newline at end of file
 diff --git a/tools/cpu-info.c b/tools/cpu-info.c
-index b0fec24..f5781f3 100644
+index ca3ebfa..a85e23d 100644
 --- a/tools/cpu-info.c
 +++ b/tools/cpu-info.c
 @@ -41,6 +41,8 @@ static const char* vendor_to_string(enum cpuinfo_vendor vendor) {
@@ -2678,7 +2683,7 @@ index b0fec24..f5781f3 100644
  		default:
  			return NULL;
  	}
-@@ -282,6 +284,8 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
+@@ -286,6 +288,8 @@ static const char* uarch_to_string(enum cpuinfo_uarch uarch) {
  			return "Dhyana";
  		case cpuinfo_uarch_taishan_v110:
  			return "TaiShan v110";
@@ -2688,10 +2693,10 @@ index b0fec24..f5781f3 100644
  			return NULL;
  	}
 diff --git a/tools/isa-info.c b/tools/isa-info.c
-index 2c40a5e..841cec7 100644
+index 740be64..df73fcc 100644
 --- a/tools/isa-info.c
 +++ b/tools/isa-info.c
-@@ -192,4 +192,26 @@ int main(int argc, char** argv) {
+@@ -197,4 +197,26 @@ int main(int argc, char** argv) {
  	printf("\tCompressed: %s\n", cpuinfo_has_riscv_c() ? "yes" : "no");
  	printf("\tVector: %s\n", cpuinfo_has_riscv_v() ? "yes" : "no");
  #endif
@@ -2718,4 +2723,3 @@ index 2c40a5e..841cec7 100644
 +	printf("\tCRC32: %s\n", cpuinfo_has_loongarch_crc32() ? "yes" : "no");
 +#endif
  }
-
