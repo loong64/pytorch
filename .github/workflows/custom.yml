@@ -45,12 +45,11 @@ jobs:
         with:
           path: |
             /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: ${{ matrix.package }}-${{ matrix.platform }}-
+          key: ${{ matrix.package }}-${{ matrix.platform }}-
 
       - name: Setup Cache
         run: |
-          sudo mkdir -p /home/runner/data/cache/.cache
+          sudo mkdir -p /home/runner/data/cache
           sudo chown -R root:docker /home/runner/data/cache
 
       - name: Build wheels
@@ -86,7 +85,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ hashFiles('pyproject.toml') }}
+          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ github.run_id }}
 
       - name: Upload wheels
         run: |
