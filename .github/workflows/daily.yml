@@ -107,6 +107,7 @@ jobs:
 
       - name: Build wheels
         uses: loong64/cibuildwheel@v2.23.2
+        timeout-minutes: 300
         env:
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
           CIBW_ARCHS: loongarch64
