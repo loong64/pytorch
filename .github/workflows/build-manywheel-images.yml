@@ -57,6 +57,5 @@ jobs:
           target: final
           tags: |
             ghcr.io/loong64/manylinuxloongarch64-builder:${{ matrix.tag }}
-          outputs: type=image,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/loong64/manylinuxloongarch64-builder:buildcache
+          cache-to: type=registry,ref=ghcr.io/loong64/manylinuxloongarch64-builder:buildcache,mode=max,compression=zstd,compression-level=22

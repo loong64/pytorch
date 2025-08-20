@@ -72,8 +72,6 @@ jobs:
             USE_CCACHE=1
             PATH="/usr/lib64/ccache:$PATH"
             CCACHE_DIR="/host/home/runner/data/cache/ccache"
-          CIBW_TEST_SKIP: "*"
-          CIBW_SKIP: "cp314*"
 
       - name: Cache permissions
         if: always()
