@@ -53,8 +53,8 @@ jobs:
           sudo chown -R root:docker /home/runner/data/cache
 
       - name: Build wheels
-        uses: loong64/cibuildwheel@v2.23.2
-        timeout-minutes: 300
+        uses: loong64/cibuildwheel@v3.1.4
+        timeout-minutes: 330
         env:
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
           CIBW_ARCHS: loongarch64
@@ -73,6 +73,7 @@ jobs:
             PATH="/usr/lib64/ccache:$PATH"
             CCACHE_DIR="/host/home/runner/data/cache/ccache"
           CIBW_TEST_SKIP: "*"
+          CIBW_SKIP: "cp314*"
 
       - name: Cache permissions
         if: always()
