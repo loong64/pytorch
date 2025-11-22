@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ['torch']
-        platform: ['cp39-manylinux_loongarch64', 'cp310-manylinux_loongarch64', 'cp311-manylinux_loongarch64', 'cp312-manylinux_loongarch64', 'cp313-manylinux_loongarch64']
+        platform: ['cp310-manylinux_loongarch64', 'cp311-manylinux_loongarch64', 'cp312-manylinux_loongarch64', 'cp313-manylinux_loongarch64', 'cp313t-manylinux_loongarch64', 'cp314-manylinux_loongarch64', 'cp314t-manylinux_loongarch64']
     steps:
       - name: Checkout Code
         run: |
@@ -53,7 +53,7 @@ jobs:
           sudo chown -R root:docker /home/runner/data/cache
 
       - name: Build wheels
-        uses: loong64/cibuildwheel@v3.1.4
+        uses: loong64/cibuildwheel@v3.2.1
         timeout-minutes: 330
         env:
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
@@ -64,6 +64,7 @@ jobs:
             yum install -y ccache
           CIBW_BEFORE_BUILD: >
             pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
+          CIBW_ENABLE: cpython-freethreading
           CIBW_ENVIRONMENT_LINUX: >
             BUILD_TEST=0
             PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
