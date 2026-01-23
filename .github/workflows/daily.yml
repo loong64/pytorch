@@ -91,28 +91,14 @@ jobs:
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
 
-      - name: Restore Cache
-        id: cache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-
-
-      - name: Setup Cache
-        run: |
-          sudo mkdir -p /home/runner/data/cache
-          sudo chown -R root:docker /home/runner/data/cache
-
       - name: Build wheels
         uses: loong64/cibuildwheel@v3.2.1
-        timeout-minutes: 300
         env:
           CIBW_ARCHS: loongarch64
           CIBW_BUILD: ${{ matrix.platform }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_BEFORE_ALL_LINUX: >
-            yum install -y ccache
+            curl -sSL https://github.com/loong64/static-clang-build/raw/refs/heads/main/manylinux-install-static-clang.sh | bash
           CIBW_BEFORE_BUILD: >
             pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
           CIBW_ENABLE: cpython-freethreading
@@ -121,24 +107,11 @@ jobs:
             PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
             PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
             PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
-            USE_CCACHE=1
-            PATH="/usr/lib64/ccache:$PATH"
-            CCACHE_DIR="/host/home/runner/data/cache/ccache"
+            CC="/opt/clang/bin/clang"
+            CXX="/opt/clang/bin/clang++"
+            LDFLAGS="-fuse-ld=lld"
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
           CIBW_TEST_SKIP: "*"
-
-      - name: Cache permissions
-        if: always()
-        run: |
-          sudo chown -R runner:docker /home/runner/data/cache
-
-      - name: Save Cache
-        if: always()
-        id: cache-save
-        uses: actions/cache/save@v4
-        with:
-          path: /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ github.run_id }}
 
       - name: Upload wheels
         run: |
