@@ -87,6 +87,7 @@ jobs:
 
           echo "PYTORCH_BUILD_NUMBER=1" >> $GITHUB_ENV
           echo "PYTORCH_BUILD_VERSION=${app_version/v/}" >> $GITHUB_ENV
+          echo "PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple" >> $GITHUB_ENV
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -96,7 +97,7 @@ jobs:
         env:
           CIBW_ARCHS: loongarch64
           CIBW_BUILD: ${{ matrix.platform }}
-          CIBW_BUILD_VERBOSITY: 1
+          # CIBW_BUILD_VERBOSITY: 1
           CIBW_BEFORE_ALL_LINUX: >
             curl -sSL https://github.com/loong64/static-clang-build/raw/refs/heads/main/manylinux-install-static-clang.sh | bash
           CIBW_BEFORE_BUILD: >
@@ -106,10 +107,10 @@ jobs:
             BUILD_TEST=0
             PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
             PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
-            PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
             CC="/opt/clang/bin/clang"
             CXX="/opt/clang/bin/clang++"
             LDFLAGS="-fuse-ld=lld"
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_EXTRA_INDEX_URL RUNNER_ARCH
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
           CIBW_TEST_SKIP: "*"
 
