@@ -14,78 +14,71 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: ['torch']
-        platform: ['cp310-manylinux_loongarch64', 'cp311-manylinux_loongarch64', 'cp312-manylinux_loongarch64', 'cp313-manylinux_loongarch64', 'cp313t-manylinux_loongarch64', 'cp314-manylinux_loongarch64', 'cp314t-manylinux_loongarch64']
+        DESIRED_PYTHON: ["3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
     steps:
       - name: Checkout Code
-        run: |
-          app_version=${{ github.event.inputs.app_version }}
-          wget -qO - https://github.com/pytorch/pytorch/releases/download/${app_version}/pytorch-${app_version}.tar.gz | tar xz --strip-components=1
+        uses: actions/checkout@v6
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.app_version }}
+          submodules: recursive
+          fetch-depth: 2
 
-          if [ ! -f ".ci/docker/ci_commit_pins/nccl-cu12.txt" ]; then
-            mkdir -p .ci/docker/ci_commit_pins
-            wget -qO .ci/docker/ci_commit_pins/nccl-cu12.txt https://github.com/pytorch/pytorch/raw/refs/tags/${app_version}/.ci/docker/ci_commit_pins/nccl-cu12.txt || true
-          fi
+      - name: Prepare build
+        run: |
+          app_version=${{ inputs.app_version }}
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/patch_loong64.patch | patch -p1
+
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/patch_loong64.patch | patch -p1
 
           cd third_party/sleef
           wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/sleef/sleef_loong64.patch | patch -p1
+          cd -
 
-          cd ../cpuinfo
+          cd third_party/cpuinfo
           wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch | patch -p1
+          cd -
 
           echo "PYTORCH_BUILD_NUMBER=1" >> $GITHUB_ENV
           echo "PYTORCH_BUILD_VERSION=${app_version/v/}" >> $GITHUB_ENV
+          echo "PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple" >> $GITHUB_ENV
+
+          mkdir -p wheelhouse
+          chmod +x .ci/manywheel/build.sh
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Restore Cache
-        id: cache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-
-
-      - name: Setup Cache
-        run: |
-          sudo mkdir -p /home/runner/data/cache
-          sudo chown -R root:docker /home/runner/data/cache
+        uses: docker/setup-qemu-action@v4
 
       - name: Build wheels
-        uses: loong64/cibuildwheel@v3.2.1
-        timeout-minutes: 330
-        env:
-          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
-          CIBW_ARCHS: loongarch64
-          CIBW_BUILD: ${{ matrix.platform }}
-          CIBW_BUILD_VERBOSITY: 1
-          CIBW_BEFORE_ALL_LINUX: >
-            yum install -y ccache
-          CIBW_BEFORE_BUILD: >
-            pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
-          CIBW_ENABLE: cpython-freethreading
-          CIBW_ENVIRONMENT_LINUX: >
-            BUILD_TEST=0
-            PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
-            PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
-            PIP_EXTRA_INDEX_URL="https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
-            USE_CCACHE=1
-            PATH="/usr/lib64/ccache:$PATH"
-            CCACHE_DIR="/host/home/runner/data/cache/ccache"
-
-      - name: Cache permissions
-        if: always()
+        env: 
+          PYTORCH_ROOT: /pytorch
+          PACKAGE_TYPE: manywheel
+          DESIRED_CUDA: cpu
+          GPU_ARCH_TYPE: cpu-loongarch64
+          DOCKER_IMAGE: ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64
+          DOCKER_IMAGE_TAG_PREFIX: cpu-loongarch64
+          DESIRED_PYTHON: "${{ matrix.DESIRED_PYTHON }}"
+          BUILD_ENVIRONMENT: linux-loongarch64-binary-manywheel-clang
+          PYTORCH_FINAL_PACKAGE_DIR: /artifacts
         run: |
-          sudo chown -R runner:docker /home/runner/data/cache
-
-      - name: Save Cache
-        if: always()
-        id: cache-save
-        uses: actions/cache/save@v4
-        with:
-          path: /home/runner/data/cache
-          key: ${{ matrix.package }}-${{ matrix.platform }}-${{ github.run_id }}
+          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build.sh"
+          docker run --rm \
+            --platform linux/loong64 \
+            --env PYTORCH_ROOT \
+            --env PACKAGE_TYPE \
+            --env DESIRED_CUDA \
+            --env GPU_ARCH_TYPE \
+            --env SKIP_ALL_TESTS=1 \
+            --env DESIRED_PYTHON \
+            --env BUILD_ENVIRONMENT \
+            --env PYTORCH_BUILD_NUMBER \
+            --env PYTORCH_BUILD_VERSION \
+            --env PYTORCH_FINAL_PACKAGE_DIR \
+            --env PIP_EXTRA_INDEX_URL \
+            --volume $(pwd):${PYTORCH_ROOT} \
+            --volume $(pwd)/wheelhouse:/${PYTORCH_FINAL_PACKAGE_DIR} \
+          ${DOCKER_IMAGE}:${DOCKER_IMAGE_TAG_PREFIX} \
+          sh -c "${DOCKER_CMD}"
 
       - name: Upload wheels
         run: |
@@ -96,3 +89,9 @@ jobs:
         env:
           TWINE_USERNAME: ${{ github.repository_owner }}
           TWINE_PASSWORD: ${{ secrets.GL_TOKEN }}
+
+      - name: Upload release
+        run:
+          gh release upload ${{ needs.check.outputs.version }} -R ${{ github.repository }} wheelhouse/*.whl --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
