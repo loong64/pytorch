@@ -7,7 +7,7 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       create: ${{ steps.check_release.outputs.create }}
       version: ${{ steps.get_version.outputs.version }}
@@ -39,7 +39,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: env.create == '1'
 
       - name: Create tag
@@ -66,53 +66,66 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: ['torch']
-        platform: ['cp310-manylinux_loongarch64', 'cp311-manylinux_loongarch64', 'cp312-manylinux_loongarch64', 'cp313-manylinux_loongarch64', 'cp313t-manylinux_loongarch64', 'cp314-manylinux_loongarch64', 'cp314t-manylinux_loongarch64']
+        DESIRED_PYTHON: ["3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
     steps:
       - name: Checkout Code
+        uses: actions/checkout@v6
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ needs.check.outputs.version }}
+          submodules: true
+
+      - name: Prepare build
         run: |
           app_version=${{ needs.check.outputs.version }}
-          wget -qO - https://github.com/pytorch/pytorch/releases/download/${app_version}/pytorch-${app_version}.tar.gz | tar xz --strip-components=1
-
-          if [ ! -f ".ci/docker/ci_commit_pins/nccl-cu12.txt" ]; then
-            mkdir -p .ci/docker/ci_commit_pins
-            wget -qO .ci/docker/ci_commit_pins/nccl-cu12.txt https://github.com/pytorch/pytorch/raw/refs/tags/${app_version}/.ci/docker/ci_commit_pins/nccl-cu12.txt || true
-          fi
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/patch_loong64.patch | patch -p1
 
           cd third_party/sleef
           wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/sleef/sleef_loong64.patch | patch -p1
+          cd -
 
-          cd ../cpuinfo
+          cd third_party/cpuinfo
           wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch | patch -p1
+          cd -
 
           echo "PYTORCH_BUILD_NUMBER=1" >> $GITHUB_ENV
           echo "PYTORCH_BUILD_VERSION=${app_version/v/}" >> $GITHUB_ENV
           echo "PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple" >> $GITHUB_ENV
 
+          mkdir -p wheelhouse
+          chmod +x .ci/manywheel/build.sh
+
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Build wheels
-        uses: loong64/cibuildwheel@v3.2.1
-        env:
-          CIBW_ARCHS: loongarch64
-          CIBW_BUILD: ${{ matrix.platform }}
-          # CIBW_BUILD_VERBOSITY: 1
-          CIBW_BEFORE_ALL_LINUX: >
-            curl -sSL https://github.com/loong64/static-clang-build/raw/refs/heads/main/manylinux-install-static-clang.sh | bash
-          CIBW_BEFORE_BUILD: >
-            pip install https://github.com/loong64/auditwheel/releases/download/6.2.0/auditwheel-6.2.0-py3-none-any.whl
-          CIBW_ENABLE: cpython-freethreading
-          CIBW_ENVIRONMENT_LINUX: >
-            BUILD_TEST=0
-            PYTORCH_BUILD_NUMBER=${{ env.PYTORCH_BUILD_NUMBER }}
-            PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
-            CC="/opt/clang/bin/clang"
-            CXX="/opt/clang/bin/clang++"
-            LDFLAGS="-fuse-ld=lld"
-          CIBW_ENVIRONMENT_PASS_LINUX: PIP_EXTRA_INDEX_URL RUNNER_ARCH
-          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
-          CIBW_TEST_SKIP: "*"
+        env: 
+          PYTORCH_ROOT: /pytorch
+          PACKAGE_TYPE: manywheel
+          DESIRED_CUDA: cpu
+          GPU_ARCH_TYPE: cpu-loongarch64
+          DOCKER_IMAGE: ghcr.io/loong64/manylinuxloongarch64-builder
+          DOCKER_IMAGE_TAG_PREFIX: cpu-loongarch64
+          DESIRED_PYTHON: "${{ matrix.DESIRED_PYTHON }}"
+          BUILD_ENVIRONMENT: linux-loongarch64-binary-manywheel-clang
+          PYTORCH_FINAL_PACKAGE_DIR: /artifacts
+          PIP_EXTRA_INDEX_URL: "https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple"
+        run: |
+          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build.sh"
+          docker run --rm \
+            -e PYTORCH_ROOT \
+            -e PACKAGE_TYPE \
+            -e DESIRED_CUDA \
+            -e GPU_ARCH_TYPE \
+            -e SKIP_ALL_TESTS=1 \
+            -e DESIRED_PYTHON \
+            -e BUILD_ENVIRONMENT \
+            -e PYTORCH_FINAL_PACKAGE_DIR \ 
+            -e PIP_EXTRA_INDEX_URL \
+            -v $(pwd):/pytorch \
+            -v $(pwd)/wheelhouse:/${PYTORCH_FINAL_PACKAGE_DIR} \
+          ${DOCKER_IMAGE}:${DOCKER_IMAGE_TAG_PREFIX} \
+          sh -c "${DOCKER_CMD}"
 
       - name: Upload wheels
         run: |
