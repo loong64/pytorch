@@ -89,16 +89,16 @@ index 9a6b14c..ef2a5ca 100755
 +       "libgfortran.so.5"
 +       "libopenblas.so.0"
 +   )
-+fi 
++fi
 +
  rm -rf /usr/local/cuda*
  
  SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 diff --git a/.ci/pytorch/build.sh b/.ci/pytorch/build.sh
-index eb3529a..70be143 100755
+index 265a6f5..612ea78 100755
 --- a/.ci/pytorch/build.sh
 +++ b/.ci/pytorch/build.sh
-@@ -248,7 +248,7 @@ fi
+@@ -205,7 +205,7 @@ fi
  
  # Do not change workspace permissions for ROCm and s390x CI jobs
  # as it can leave workspace with bad permissions for cancelled jobs
@@ -107,11 +107,11 @@ index eb3529a..70be143 100755
    # Workaround for dind-rootless userid mapping (https://github.com/pytorch/ci-infra/issues/96)
    WORKSPACE_ORIGINAL_OWNER_ID=$(stat -c '%u' "/var/lib/jenkins/workspace")
    cleanup_workspace() {
-@@ -445,6 +445,6 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* && "$BUILD_ENVIRONMENT" != *bazel* ]];
+@@ -383,6 +383,6 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* ]]; then
    PYTHONPATH=. python tools/stats/export_test_times.py
  fi
- # don't do this for bazel or s390x or riscv64 as they don't use sccache
--if [[ "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* && "$BUILD_ENVIRONMENT" != *-bazel-* ]]; then
-+if [[ "$BUILD_ENVIRONMENT" != *loongarch64* "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* && "$BUILD_ENVIRONMENT" != *-bazel-* ]]; then
+ # don't do this for s390x or riscv64 as they don't use sccache
+-if [[ "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* ]]; then
++if [[ "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* ]]; then
    print_sccache_stats
  fi
