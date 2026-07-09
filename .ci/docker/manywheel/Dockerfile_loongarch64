@@ -1,4 +1,4 @@
-FROM ghcr.io/loong64/manylinux_2_38_loongarch64 AS base
+FROM ghcr.io/loong64/manylinux_2_38_loongarch64:2026.06.04-1 AS base
 
 # Language variabes
 ENV LC_ALL=en_US.UTF-8
@@ -46,11 +46,8 @@ RUN yum install -y \
   yum clean all
 
 # Clang
-# ARG RUNNER_ARCH
-# RUN cd /opt \
-#  && curl -LO https://github.com/loong64/static-clang-build/raw/refs/heads/main/manylinux-install-static-clang.sh \
-#  && bash ./manylinux-install-static-clang.sh \
-#  && rm -f ./manylinux-install-static-clang.sh
+ARG RUNNER_ARCH
+RUN [ -n "${RUNNER_ARCH}" ] && manylinux-install-clang
 
 # git236+ would refuse to run git commands in repos owned by other users
 # Which causes version check to fail, as pytorch repo is bind-mounted into the image
