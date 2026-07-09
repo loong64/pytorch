@@ -11,10 +11,6 @@ on:
 jobs:
   custom:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        DESIRED_PYTHON: ["3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -51,17 +47,18 @@ jobs:
 
       - name: Build wheels
         env: 
+          BUILD_ENVIRONMENT: linux-loongarch64-binary-manywheel
+          PYTORCH_FINAL_PACKAGE_DIR: /artifacts
           PYTORCH_ROOT: /pytorch
           PACKAGE_TYPE: manywheel
           DESIRED_CUDA: cpu
           GPU_ARCH_TYPE: cpu-loongarch64
           DOCKER_IMAGE: ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64
-          DOCKER_IMAGE_TAG_PREFIX: cpu-loongarch64
-          DESIRED_PYTHON: "${{ matrix.DESIRED_PYTHON }}"
-          BUILD_ENVIRONMENT: linux-loongarch64-binary-manywheel-clang
-          PYTORCH_FINAL_PACKAGE_DIR: /artifacts
+          DESIRED_PYTHONS: "3.10 3.11 3.12 3.13 3.14 3.14t"
+          BUILD_NAME_PREFIX: manywheel-py
+          BUILD_NAME_SUFFIX: -cpu-loongarch64
         run: |
-          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build.sh"
+          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build_all.sh"
           docker run --rm \
             --platform linux/loong64 \
             --env PYTORCH_ROOT \
@@ -69,16 +66,17 @@ jobs:
             --env DESIRED_CUDA \
             --env GPU_ARCH_TYPE \
             --env SKIP_ALL_TESTS=1 \
-            --env DESIRED_PYTHON \
+            --env DESIRED_PYTHONS \
             --env BUILD_ENVIRONMENT \
             --env PYTORCH_BUILD_NUMBER \
             --env PYTORCH_BUILD_VERSION \
             --env PYTORCH_FINAL_PACKAGE_DIR \
+            --env BUILD_NAME_PREFIX \
+            --env BUILD_NAME_SUFFIX \
             --env PIP_EXTRA_INDEX_URL \
             --volume $(pwd):${PYTORCH_ROOT} \
             --volume $(pwd)/wheelhouse:/${PYTORCH_FINAL_PACKAGE_DIR} \
-          ${DOCKER_IMAGE}:${DOCKER_IMAGE_TAG_PREFIX} \
-          sh -c "${DOCKER_CMD}"
+          ${DOCKER_IMAGE} sh -c "${DOCKER_CMD}"
 
       - name: Upload wheels
         run: |
