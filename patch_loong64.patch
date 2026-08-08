@@ -56,8 +56,28 @@ index cd20c07..ba9aac5 100644
      else
          # zip up the wheel back
          zip -rq $(basename $pkg) $PREIX*
+diff --git a/.ci/manywheel/build_cpu.sh b/.ci/manywheel/build_cpu.sh
+index 070b2ce..d5d4fad 100755
+--- a/.ci/manywheel/build_cpu.sh
++++ b/.ci/manywheel/build_cpu.sh
+@@ -48,6 +48,15 @@ DEPS_SONAME=(
+     "libgomp.so.1"
+ )
+ 
++if [[ "$ARCH" == "loongarch64" ]]; then
++    DEPS_LIST+=(
++        "/usr/lib64/libopenblas.so.0"
++    )
++    DEPS_SONAME+=(
++        "libopenblas.so.0"
++    )
++fi
++
+ rm -rf /usr/local/cuda*
+ 
+ SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 diff --git a/.ci/manywheel/build_env_setup.py b/.ci/manywheel/build_env_setup.py
-index a72b7e4..d285170 100755
+index a72b7e4..3944deb 100755
 --- a/.ci/manywheel/build_env_setup.py
 +++ b/.ci/manywheel/build_env_setup.py
 @@ -186,6 +186,7 @@ ROCM_BUILD_ENV_STATIC: dict[str, str] = {
@@ -68,6 +88,15 @@ index a72b7e4..d285170 100755
  }
  
  
+@@ -210,7 +211,7 @@ def install_os_packages() -> None:
+     # (.ci/docker/manywheel/Dockerfile_2_28). Only zip + openssl are not,
+     # matching the legacy build_common.sh contract.
+     name = os_name()
+-    if any(distro in name for distro in ("AlmaLinux", "CentOS", "Red Hat")):
++    if any(distro in name for distro in ("AlmaLinux", "Anolis OS", "CentOS", "Red Hat")):
+         subprocess.run(
+             ["yum", "install", "-q", "-y", "zip", "openssl"],
+             check=True,
 @@ -453,7 +454,7 @@ def main() -> None:
          setup_cuda(cuda_version)
          env_out.update(cuda_build_env(cuda_version, arch))
@@ -78,15 +107,65 @@ index a72b7e4..d285170 100755
          env_out.update(CPU_BUILD_ENV)
          print("CPU environment configured")
 diff --git a/.ci/manywheel/repair_wheel.py b/.ci/manywheel/repair_wheel.py
-index ae964c5..a440554 100755
+index ae964c5..e3a3cdb 100755
 --- a/.ci/manywheel/repair_wheel.py
 +++ b/.ci/manywheel/repair_wheel.py
-@@ -419,7 +419,7 @@ def main() -> None:
+@@ -114,6 +114,29 @@ def aarch64_extra_deps(use_cuda: bool) -> list[Path]:
+     return deps
+ 
+ 
++def loongarch64_extra_deps(use_cuda: bool) -> list[Path]:
++    """Libraries to bundle into torch/lib/ on loongarch64.
++
++    CPU builds link against OpenBLAS + libgfortran.
++    """
++    deps: list[Path] = []
++    candidates: list[Path] = [Path("/usr/lib64/libgfortran.so.5")]
++    if use_cuda:
++        candidates += [
++            Path(f"/usr/local/lib/{name}")
++            for name in (
++                "libnvpl_blas_lp64_gomp.so.0",
++                "libnvpl_lapack_lp64_gomp.so.0",
++                "libnvpl_blas_core.so.0",
++                "libnvpl_lapack_core.so.0",
++            )
++        ]
++    else:
++        candidates.append(Path("/usr/lib64/libopenblas.so.0"))
++    deps = [p for p in candidates if p.is_file()]
++    return deps
++
++
+ # ROCm shared libs to bundle. Discovered under $ROCM_HOME/{lib,lib64}.
+ ROCM_SO_FILES: list[str] = [
+     "libMIOpen.so",
+@@ -400,6 +423,9 @@ def main() -> None:
+         force_rpath = False
+ 
+     aarch64_deps = aarch64_extra_deps(use_cuda) if arch == "aarch64" else []
++    loongarch64_deps = loongarch64_extra_deps(use_cuda) if arch == "loongarch64" else []
++
++    arch_deps = loongarch64_deps if arch == "loongarch64" else aarch64_deps
+ 
+     args.output_dir.mkdir(parents=True, exist_ok=True)
+     wheels = sorted(args.input_dir.glob("*.whl"))
+@@ -411,7 +437,7 @@ def main() -> None:
+             whl,
+             args.output_dir,
+             libgomp_path,
+-            aarch64_deps,
++            arch_deps,
+             bundled_libs,
+             aux_files,
+             c_so_rpath,
+@@ -419,7 +445,8 @@ def main() -> None:
              force_rpath,
          )
  
 -    retag_wheels(args.output_dir, f"manylinux_2_28_{arch}")
-+    retag_wheels(args.output_dir, f"manylinux_2_38_{arch}")
++    manylinux_version = os.environ.get("AUDITWHEEL_POLICY", "manylinux_2_28")
++    retag_wheels(args.output_dir, f"{manylinux_version}_{arch}")
      repaired = list(args.output_dir.glob("*.whl"))
      print(f"Repaired {len(repaired)} wheel(s) in {args.output_dir}")
  
