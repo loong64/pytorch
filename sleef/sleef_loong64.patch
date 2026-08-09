@@ -1,32 +1,1863 @@
+From 88cd866bfda739ce716f66c304b84a246ed66e41 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=90=B4=E5=B0=8F=E7=99=BD?= <296015668@qq.com>
+Date: Sat, 8 Aug 2026 16:32:21 +0800
+Subject: [PATCH] feat: add loongarch64 support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: 吴小白 <296015668@qq.com>
+---
+ CMakeLists.txt                     |   7 +-
+ Configure.cmake                    |  40 ++
+ src/arch/helperlasx.h              | 862 +++++++++++++++++++++++++++++
+ src/arch/helperlsx.h               | 849 ++++++++++++++++++++++++++++
+ src/arch/helperpurec_scalar.h      |   2 +-
+ src/common/quaddef.h               |   8 +
+ src/libm-tester/CMakeLists.txt     |  47 ++
+ src/libm-tester/iutsimd.c          |  58 ++
+ src/libm-tester/tester2simddp.c    |  18 +
+ src/libm-tester/tester2simdsp.c    |  18 +
+ src/libm-tester/tester3.c          |  16 +
+ src/libm-tester/testerloonglane.c  | 338 +++++++++++
+ src/libm/CMakeLists.txt            |  13 +
+ src/libm/sleeflibm_header.h.org.in |  14 +-
+ src/libm/sleefqp.c                 | 116 ++--
+ src/libm/sleefsimddp.c             |  18 +
+ src/libm/sleefsimdsp.c             |  30 +-
+ src/quad/CMakeLists.txt            |   6 +
+ src/quad/sleefquad_header.h.org.in |   4 +
+ 19 files changed, 2401 insertions(+), 63 deletions(-)
+ create mode 100644 src/arch/helperlasx.h
+ create mode 100644 src/arch/helperlsx.h
+ create mode 100644 src/libm-tester/testerloonglane.c
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 12600629a..6a390dfac 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -37,6 +37,10 @@ option(SLEEF_ENABLE_CXX "Enable C++" OFF)
+ 
+ option(SLEEF_BUILD_WITH_LIBM "build libsleef with libm, can turn off on Windows to solve mutiple math functions issue." ON)
+ 
++option(SLEEF_DISABLE_LSX "Disable LSX" OFF)
++option(SLEEF_ENFORCE_LSX "Build fails if LSX is not supported by the compiler" OFF)
++option(SLEEF_DISABLE_LASX "Disable LASX" OFF)
++option(SLEEF_ENFORCE_LASX "Build fails if LASX is not supported by the compiler" OFF)
+ #
+ 
+ if (SLEEF_BUILD_BENCH)
+@@ -102,6 +106,7 @@ set(SLEEF_ALL_SUPPORTED_EXTENSIONS
+   VSX VSXNOFMA VSX3 VSX3NOFMA                           # PPC64
+   VXE VXENOFMA VXE2 VXE2NOFMA                           # IBM Z
+   RVVM1NOFMA RVVM1 RVVM2NOFMA RVVM2                     # RISC-V Vectors
++  LSX LASX                                              # LoongArch Vectors
+   PUREC_SCALAR PURECFMA_SCALAR                          # Generic type
+   CACHE STRING "List of SIMD architectures supported by libsleef."
+   )
+@@ -113,6 +118,7 @@ set(SLEEF_SUPPORTED_LIBM_EXTENSIONS
+   VSX VSXNOFMA VSX3 VSX3NOFMA                           # PPC64
+   VXE VXENOFMA VXE2 VXE2NOFMA                           # IBM Z
+   RVVM1NOFMA RVVM1 RVVM2NOFMA RVVM2                     # RISC-V Vectors
++  LSX LASX                                              # LoongArch Vectors
+   PUREC_SCALAR PURECFMA_SCALAR                          # Generic type
+   CACHE STRING "List of SIMD architectures supported by libsleef."
+   )
+@@ -358,4 +364,3 @@ if(SLEEF_SHOW_CONFIG)
+     message(STATUS "Building SLEEF with AArch64 Vector PCS support")
+   endif()
+ endif(SLEEF_SHOW_CONFIG)
+-
 diff --git a/Configure.cmake b/Configure.cmake
-index 19a153f..ab893ec 100644
+index 7c64ce962..816893814 100644
 --- a/Configure.cmake
 +++ b/Configure.cmake
-@@ -130,6 +130,8 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
-   set(CLANG_FLAGS_ENABLE_PURECFMA_SCALAR "-march=z14;-mzvector")
- elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64")
-   set(SLEEF_ARCH_RISCV64 ON CACHE INTERNAL "True for RISCV64 architecture.")
+@@ -126,6 +126,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+   set(COMPILER_SUPPORTS_NEON32VFPV4 1)
+ 
+   set(CLANG_FLAGS_ENABLE_PURECFMA_SCALAR "-mfpu=vfpv4")
 +elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "loongarch64")
 +  set(SLEEF_ARCH_LOONGARCH64 ON CACHE INTERNAL "True for LoongArch64 architecture.")
++
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
+   set(SLEEF_ARCH_PPC64 ON CACHE INTERNAL "True for PPC64 architecture.")
+ 
+@@ -186,6 +189,9 @@ set(CLANG_FLAGS_ENABLE_RVVM1 "-march=rv64gcv_zba_zbb_zbs")
+ set(CLANG_FLAGS_ENABLE_RVVM1NOFMA "-march=rv64gcv_zba_zbb_zbs")
+ set(CLANG_FLAGS_ENABLE_RVVM2 "-march=rv64gcv_zba_zbb_zbs")
+ set(CLANG_FLAGS_ENABLE_RVVM2NOFMA "-march=rv64gcv_zba_zbb_zbs")
++# LoongArch vector extensions.
++set(CLANG_FLAGS_ENABLE_LSX "-mlsx")
++set(CLANG_FLAGS_ENABLE_LASX "-mlasx")
+ 
+ set(FLAGS_OTHERS "")
+ 
+@@ -546,6 +552,40 @@ if (SLEEF_ENFORCE_SVE AND NOT COMPILER_SUPPORTS_SVE)
+   message(FATAL_ERROR "SLEEF_ENFORCE_SVE is specified and that feature is disabled or not supported by the compiler")
  endif()
  
- set(COMPILER_SUPPORTS_PUREC_SCALAR 1)
-@@ -346,7 +348,12 @@ endif()
- 
- # float128
- 
--option(SLEEF_DISABLE_FLOAT128 "Disable float128" OFF)
-+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "loongarch64")
-+  # unsupport float128 in gcc
-+  option(SLEEF_DISABLE_FLOAT128 "Disable float128" ON)
-+else()
-+  option(SLEEF_DISABLE_FLOAT128 "Disable float128" OFF)
++# LoongArch vectors
++
++if(SLEEF_ARCH_LOONGARCH64 AND NOT SLEEF_DISABLE_LSX)
++  string (REPLACE ";" " " CMAKE_REQUIRED_FLAGS "${FLAGS_ENABLE_LSX}")
++  CHECK_C_SOURCE_COMPILES("
++  #include <lsxintrin.h>
++  int main() {
++    __m128 d = __lsx_vfadd_s((__m128){ 1, 2, 3, 4 }, (__m128){ 1, 2, 3, 4 });
++  }"
++    COMPILER_SUPPORTS_LSX)
 +endif()
- option(SLEEF_ENFORCE_FLOAT128 "Build fails if float128 is not supported by the compiler" OFF)
++
++if (COMPILER_SUPPORTS_LSX)
++  set(COMPILER_SUPPORTS_LSX 1)
++endif()
++
++if (SLEEF_ENFORCE_LSX AND NOT COMPILER_SUPPORTS_LSX)
++  message(FATAL_ERROR "SLEEF_ENFORCE_LSX is specified and that feature is disabled or not supported by the compiler")
++endif()
++
++if(SLEEF_ARCH_LOONGARCH64 AND NOT SLEEF_DISABLE_LASX)
++  string (REPLACE ";" " " CMAKE_REQUIRED_FLAGS "${FLAGS_ENABLE_LASX}")
++  CHECK_C_SOURCE_COMPILES("
++  #include <lasxintrin.h>
++  int main() {
++    __m256d d = __lasx_xvfadd_d((__m256d){ 1, 2, 3, 4 }, (__m256d){ 1, 2, 3, 4 });
++  }"
++    COMPILER_SUPPORTS_LASX)
++endif()
++
++if (SLEEF_ENFORCE_LASX AND NOT COMPILER_SUPPORTS_LASX)
++  message(FATAL_ERROR "SLEEF_ENFORCE_LASX is specified and that feature is disabled or not supported by the compiler")
++endif()
++
+ # VSX
  
- if(NOT SLEEF_DISABLE_FLOAT128)
+ option(SLEEF_DISABLE_VSX "Disable VSX" OFF)
+diff --git a/src/arch/helperlasx.h b/src/arch/helperlasx.h
+new file mode 100644
+index 000000000..b654677e6
+--- /dev/null
++++ b/src/arch/helperlasx.h
+@@ -0,0 +1,862 @@
++/* LoongArch LASX ISA backend. */
++#if !defined(__loongarch_asx) && !defined(SLEEF_GENHEADER)
++#error Please specify -mlasx.
++#endif
++
++#if !defined(SLEEF_GENHEADER)
++#include <lsxintrin.h>
++#include <lasxintrin.h>
++#include <stdint.h>
++#include "misc.h"
++#endif
++
++#ifndef CONFIG
++#error CONFIG macro not defined
++#endif
++
++#define ENABLE_DP
++//@#define ENABLE_DP
++#define ENABLE_SP
++//@#define ENABLE_SP
++#define LOG2VECTLENDP 2
++//@#define LOG2VECTLENDP 2
++#define VECTLENDP (1 << LOG2VECTLENDP)
++//@#define VECTLENDP (1 << LOG2VECTLENDP)
++#define LOG2VECTLENSP (LOG2VECTLENDP + 1)
++//@#define LOG2VECTLENSP (LOG2VECTLENDP + 1)
++#define VECTLENSP (1 << LOG2VECTLENSP)
++//@#define VECTLENSP (1 << LOG2VECTLENSP)
++#define DFTPRIORITY LOG2VECTLENDP
++#define FULL_FP_ROUNDING
++//@#define FULL_FP_ROUNDING
++#define ACCURATE_SQRT
++//@#define ACCURATE_SQRT
++#define ISANAME "LoongArch LASX"
++#if CONFIG == 1
++#define ENABLE_FMA_DP
++//@#define ENABLE_FMA_DP
++#define ENABLE_FMA_SP
++//@#define ENABLE_FMA_SP
++#endif
++
++typedef v8i32 vmask;
++typedef v8i32 vopmask;
++typedef __m256 vfloat;
++typedef v8i32 vint2;
++typedef __m256d vdouble;
++typedef v4i32 vint;
++typedef v4i64 vint64;
++typedef v4u64 vuint64;
++
++typedef struct { vmask x, y; } vquad;
++typedef vquad vargquad;
++
++#if VECTLENDP == 2
++static INLINE vopmask vcast_vo32_vo64(vopmask m) { return (vopmask){ m[1], m[3], 0, 0 }; }
++static INLINE vopmask vcast_vo64_vo32(vopmask m) { return (vopmask){ m[0], m[0], m[1], m[1] }; }
++
++static INLINE vint vcast_vi_i(int i) { return (vint) { i, i }; }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2) { i, i, i, i }; }
++static INLINE vfloat vcast_vf_f(float f) { return (vfloat) { f, f, f, f }; }
++static INLINE vdouble vcast_vd_d(double d) { return (vdouble) { d, d }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d }; }
++#endif
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) { return (vint2){ 0, vi[0], 0, vi[1] }; }
++static INLINE vint vcastu_vi_vi2(vint2 vi2) { return (vint){ vi2[1], vi2[3] }; }
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) { return (vint){ vi2[0], vi2[1] }; }
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) { return (vint2){ vi[0], vi[1], 0, 0 }; }
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble) { vd[1], vd[0] }; }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return vd; }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) { return (vfloat) { vd[1], vd[0], vd[3], vd[2] }; }
++static INLINE vfloat vreva2_vf_vf(vfloat vd) { return (vfloat) { vd[2], vd[3], vd[0], vd[1] }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return vd; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1] }; }
++#endif
++
++#define PNMASK ((vdouble) { +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++#elif VECTLENDP == 4
++static INLINE vopmask vcast_vo32_vo64(vopmask m) {
++  __m256i t = __lasx_xvpickod_w((__m256i)m, (__m256i)m);
++  return (vopmask)__lasx_xvpermi_d(t, 0x58);
++}
++static INLINE vopmask vcast_vo64_vo32(vopmask m) {
++  __m256i t = __lasx_xvpermi_d((__m256i)m, 0x50);
++  return (vopmask)__lasx_xvilvl_w(t, t);
++}
++
++static INLINE vint vcast_vi_i(int i) { return (vint)__lsx_vreplgr2vr_w(i); }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2)__lasx_xvreplgr2vr_w(i); }
++static INLINE vfloat vcast_vf_f(float f) { union { float f; int32_t i; } u = { f }; return (vfloat)__lasx_xvreplgr2vr_w(u.i); }
++static INLINE vdouble vcast_vd_d(double d) { union { double d; int64_t i; } u = { d }; return (vdouble)__lasx_xvreplgr2vr_d(u.i); }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d, d, d }; }
++#endif
++
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h, l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) {
++  return (vint2) { 0, vi[0], 0, vi[1], 0, vi[2], 0, vi[3] };
++}
++static INLINE vint vcastu_vi_vi2(vint2 vi2) {
++  return (vint) { vi2[1], vi2[3], vi2[5], vi2[7] };
++}
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) {
++  return (vint) { vi2[0], vi2[1], vi2[2], vi2[3] };
++}
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) {
++  return (vint2) { vi[0], vi[1], vi[2], vi[3], 0, 0, 0, 0 };
++}
++
++#define PNMASK ((vdouble) { +0.0, -0.0, +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0, -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble)__lasx_xvshuf4i_w((__m256i)vd, 0x4e); }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return (vdouble)__lasx_xvpermi_d((__m256i)vd, 0x4e); }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) { return (vfloat)__lasx_xvshuf4i_w((__m256i)vd, 0xb1); }
++static INLINE vfloat vreva2_vf_vf(vfloat vd) { return (vfloat)__lasx_xvpermi_d((__m256i)vd, 0x1b); }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0], vd[3], vd[2] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1], +vd[2], -vd[3] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1], -vd[2], +vd[3] }; }
++#endif
++#elif VECTLENDP == 8
++static INLINE vopmask vcast_vo32_vo64(vopmask m) { return (vopmask){ m[1], m[3], m[5], m[7], m[9], m[11], m[13], m[15], 0, 0, 0, 0, 0, 0, 0, 0 }; }
++static INLINE vopmask vcast_vo64_vo32(vopmask m) { return (vopmask){ m[0], m[0], m[1], m[1], m[2], m[2], m[3], m[3], m[4], m[4], m[5], m[5], m[6], m[6], m[7], m[7] }; }
++
++static INLINE vint vcast_vi_i(int i) { return (vint) { i, i, i, i, i, i, i, i }; }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2) { i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i }; }
++static INLINE vfloat vcast_vf_f(float f) { return (vfloat) { f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f }; }
++static INLINE vdouble vcast_vd_d(double d) { return (vdouble) { d, d, d, d, d, d, d, d }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d, d, d, d, d, d, d }; }
++#endif
++
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h, l, h, l, h, l, h, l, h, l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) { return (vint2){ 0, vi[0], 0, vi[1], 0, vi[2], 0, vi[3], 0, vi[4], 0, vi[5], 0, vi[6], 0, vi[7] }; }
++static INLINE vint vcastu_vi_vi2(vint2 vi2) { return (vint){ vi2[1], vi2[3], vi2[5], vi2[7], vi2[9], vi2[11], vi2[13], vi2[15] }; }
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) { return (vint){ vi2[0], vi2[1], vi2[2], vi2[3], vi2[4], vi2[5], vi2[6], vi2[7] }; }
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) { return (vint2){ vi[0], vi[1], vi[2], vi[3], vi[4], vi[5], vi[6], vi[7], 0, 0, 0, 0, 0, 0, 0, 0 }; }
++
++#define PNMASK ((vdouble) { +0.0, -0.0, +0.0, -0.0, +0.0, -0.0, +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0, -0.0, +0.0, -0.0, +0.0, -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble) { vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6] }; }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return (vdouble) { vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) {
++  return (vfloat) {
++    vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6],
++      vd[9], vd[8], vd[11], vd[10], vd[13], vd[12], vd[15], vd[14] };
++}
++static INLINE vfloat vreva2_vf_vf(vfloat vd) {
++  return (vfloat) {
++    vd[14], vd[15], vd[12], vd[13], vd[10], vd[11], vd[8], vd[9],
++      vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1]};
++}
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1], +vd[2], -vd[3], +vd[4], -vd[5], +vd[6], -vd[7] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1], -vd[2], +vd[3], -vd[4], +vd[5], -vd[6], +vd[7] }; }
++#endif
++#else
++static INLINE vint vcast_vi_i(int k) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = k;
++  return ret;
++}
++
++static INLINE vint2 vcast_vi2_i(int k) {
++  vint2 ret;
++  for(int i=0;i<VECTLENSP;i++) ret[i] = k;
++  return ret;
++}
++
++static INLINE vdouble vcast_vd_d(double d) {
++  vdouble ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = d;
++  return ret;
++}
++
++static INLINE vfloat vcast_vf_f(float f) {
++  vfloat ret;
++  for(int i=0;i<VECTLENSP;i++) ret[i] = f;
++  return ret;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) {
++  vlongdouble ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = d;
++  return ret;
++}
++#endif
++
++static INLINE vopmask vcast_vo32_vo64(vopmask m) {
++  vopmask ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = m[i*2+1];
++  for(int i=VECTLENDP;i<VECTLENDP*2;i++) ret[i] = 0;
++  return ret;
++}
++
++static INLINE vopmask vcast_vo64_vo32(vopmask m) {
++  vopmask ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i*2] = ret[i*2+1] = m[i];
++  return ret;
++}
++
++static INLINE vmask vcast_vm_i_i(int h, int l) {
++  vmask ret;
++  for(int i=0;i<VECTLENDP;i++) {
++    ret[i*2+0] = l;
++    ret[i*2+1] = h;
++  }
++  return ret;
++}
++
++static INLINE vint2 vcastu_vi2_vi(vint vi) {
++  vint2 ret;
++  for(int i=0;i<VECTLENDP;i++) {
++    ret[i*2+0] = 0;
++    ret[i*2+1] = vi[i];
++  }
++  return ret;
++}
++
++static INLINE vint vcastu_vi_vi2(vint2 vi2) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi2[i*2+1];
++  return ret;
++}
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi2[i];
++  return ret;
++}
++
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) {
++  vint2 ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi[i];
++  for(int i=VECTLENDP;i<VECTLENDP*2;i++) ret[i] = 0;
++  return ret;
++}
++
++static INLINE vdouble vrev21_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vdouble vreva2_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[(VECTLENDP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENDP/2-1-i)*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vrev21_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vfloat vreva2_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = d0[(VECTLENSP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENSP/2-1-i)*2+1];
++  }
++  return r;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[(VECTLENDP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENDP/2-1-i)*2+1];
++  }
++  return r;
++}
++#endif
++
++static INLINE vdouble vposneg_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vdouble vnegpos_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vposneg_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vnegpos_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++#endif
++#endif
++
++//
++
++static INLINE int vavailability_i(int name) { return -1; }
++static INLINE void vprefetch_v_p(const void *ptr) { }
++
++static INLINE int vtestallones_i_vo64(vopmask g) {
++  return __lasx_xbnz_d((__m256i)g);
++}
++
++static INLINE int vtestallones_i_vo32(vopmask g) {
++  return __lasx_xbnz_w((__m256i)g);
++}
++
++//
++
++static vint2 vloadu_vi2_p(int32_t *p) {
++  return (vint2)__lasx_xvld(p, 0);
++}
++
++static void vstoreu_v_p_vi2(int32_t *p, vint2 v) {
++  __lasx_xvst((__m256i)v, p, 0);
++}
++
++static vint vloadu_vi_p(int32_t *p) {
++  return (vint)__lsx_vld(p, 0);
++}
++
++static void vstoreu_v_p_vi(int32_t *p, vint v) {
++  __lsx_vst((__m128i)v, p, 0);
++}
++
++//
++
++static INLINE vmask vand_vm_vm_vm(vmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vm_vm(vmask x, vmask y) {
++  return (vmask)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++static INLINE vmask vor_vm_vm_vm(vmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vm_vm(vmask x, vmask y) { return x ^ y; }
++
++static INLINE vopmask vand_vo_vo_vo(vopmask x, vopmask y) { return x & y; }
++static INLINE vopmask vandnot_vo_vo_vo(vopmask x, vopmask y) {
++  return (vopmask)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++static INLINE vopmask vor_vo_vo_vo(vopmask x, vopmask y) { return x | y; }
++static INLINE vopmask vxor_vo_vo_vo(vopmask x, vopmask y) { return x ^ y; }
++
++static INLINE vmask vand_vm_vo64_vm(vopmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vo64_vm(vopmask x, vmask y) {
++  return (vmask)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++static INLINE vmask vor_vm_vo64_vm(vopmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vo64_vm(vopmask x, vmask y) { return x ^ y; }
++
++static INLINE vmask vand_vm_vo32_vm(vopmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vo32_vm(vopmask x, vmask y) {
++  return (vmask)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++static INLINE vmask vor_vm_vo32_vm(vopmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vo32_vm(vopmask x, vmask y) { return x ^ y; }
++
++//
++
++static INLINE vdouble vsel_vd_vo_vd_vd(vopmask o, vdouble x, vdouble y) {
++  return (vdouble)__lasx_xvbitsel_v((__m256i)y, (__m256i)x, (__m256i)o);
++}
++static INLINE vint2 vsel_vi2_vo_vi2_vi2(vopmask o, vint2 x, vint2 y) {
++  return (vint2)__lasx_xvbitsel_v((__m256i)y, (__m256i)x, (__m256i)o);
++}
++
++static INLINE CONST vdouble vsel_vd_vo_d_d(vopmask o, double v1, double v0) {
++  return vsel_vd_vo_vd_vd(o, vcast_vd_d(v1), vcast_vd_d(v0));
++}
++
++static INLINE vdouble vsel_vd_vo_vo_d_d_d(vopmask o0, vopmask o1, double d0, double d1, double d2) {
++  return vsel_vd_vo_vd_vd(o0, vcast_vd_d(d0), vsel_vd_vo_d_d(o1, d1, d2));
++}
++
++static INLINE vdouble vsel_vd_vo_vo_vo_d_d_d_d(vopmask o0, vopmask o1, vopmask o2, double d0, double d1, double d2, double d3) {
++  return vsel_vd_vo_vd_vd(o0, vcast_vd_d(d0), vsel_vd_vo_vd_vd(o1, vcast_vd_d(d1), vsel_vd_vo_d_d(o2, d2, d3)));
++}
++
++static INLINE vdouble vcast_vd_vi(vint vi) {
++  vint2 t = (vint2) { vi[0], vi[1], 0, 0, vi[2], vi[3], 0, 0 };
++  return __lasx_xvffintl_d_w((__m256i)t);
++}
++static INLINE vint vtruncate_vi_vd(vdouble vd) {
++  vdouble high = (vdouble)__lasx_xvpermi_d((__m256i)vd, 0x0e);
++  return vreinterpretFirstHalf_vi_vi2((vint2)__lasx_xvftintrz_w_d(high, vd));
++}
++static INLINE vint vrint_vi_vd(vdouble vd) {
++  vdouble high = (vdouble)__lasx_xvpermi_d((__m256i)vd, 0x0e);
++  return vreinterpretFirstHalf_vi_vi2((vint2)__lasx_xvftintrne_w_d(high, vd));
++}
++static INLINE vdouble vtruncate_vd_vd(vdouble vd) { return __lasx_xvfrintrz_d(vd); }
++static INLINE vdouble vrint_vd_vd(vdouble vd) { return __lasx_xvfrintrne_d(vd); }
++
++static INLINE vopmask veq64_vo_vm_vm(vmask x, vmask y) {
++  return (vopmask)__lasx_xvseq_d((__m256i)x, (__m256i)y);
++}
++
++static INLINE vmask vadd64_vm_vm_vm(vmask x, vmask y) { return (vmask)__lasx_xvadd_d((__m256i)x, (__m256i)y); }
++
++static INLINE vmask vcast_vm_i64(int64_t i) { return (vmask)__lasx_xvreplgr2vr_d(i); }
++static INLINE vmask vcast_vm_u64(uint64_t i) { return (vmask)__lasx_xvreplgr2vr_d((long long)i); }
++static INLINE vmask vcastu_vm_vi(vint vi) {
++  return (vmask)vcastu_vi2_vi(vi);
++}
++static INLINE vint vcastu_vi_vm(vmask vm) {
++  return (vint) { vm[1], vm[3], vm[5], vm[7] };
++}
++static INLINE vmask vcast_vm_vi(vint vi) {
++  return (vmask)__lasx_vext2xv_d_w((__m256i)vreinterpretFirstHalf_vi2_vi(vi));
++}
++static INLINE vint vcast_vi_vm(vmask vm) {
++  return (vint) { vm[0], vm[2], vm[4], vm[6] };
++}
++static INLINE vmask vsel_vm_vo64_vm_vm(vopmask m, vmask x, vmask y) {
++  return (vmask)__lasx_xvbitsel_v((__m256i)y, (__m256i)x, (__m256i)m);
++}
++static INLINE vmask vsub64_vm_vm_vm(vmask x, vmask y) { return (vmask)__lasx_xvsub_d((__m256i)x, (__m256i)y); }
++static INLINE vmask vneg64_vm_vm(vmask x) { return (vmask)__lasx_xvneg_d((__m256i)x); }
++static INLINE vopmask vgt64_vo_vm_vm(vmask x, vmask y) { return (vopmask)__lasx_xvslt_d((__m256i)y, (__m256i)x); }
++#define vsll64_vm_vm_i(x, c) ((vmask)__lasx_xvslli_d((__m256i)(x), c))
++//@#define vsll64_vm_vm_i(x, c) ((vmask)__lasx_xvslli_d((__m256i)(x), c))
++#define vsrl64_vm_vm_i(x, c) ((vmask)__lasx_xvsrli_d((__m256i)(x), c))
++//@#define vsrl64_vm_vm_i(x, c) ((vmask)__lasx_xvsrli_d((__m256i)(x), c))
++
++//
++
++static INLINE vmask vreinterpret_vm_vd(vdouble vd) { return (vmask)vd; }
++static INLINE vmask vreinterpret_vm_vi64(vint64 vi) { return (vmask)vi; }
++static INLINE vint2 vreinterpret_vi2_vd(vdouble vd) { return (vint2)vd; }
++static INLINE vdouble vreinterpret_vd_vi2(vint2 vi) { return (vdouble)vi; }
++static INLINE vdouble vreinterpret_vd_vm(vmask vm) { return (vdouble)vm; }
++
++static INLINE vdouble vadd_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfadd_d(x, y); }
++static INLINE vdouble vsub_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfsub_d(x, y); }
++static INLINE vdouble vmul_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfmul_d(x, y); }
++static INLINE vdouble vdiv_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfdiv_d(x, y); }
++static INLINE vdouble vrec_vd_vd(vdouble x) { return __lasx_xvfrecip_d(x); }
++
++static INLINE vdouble vabs_vd_vd(vdouble d) { return (vdouble)__lasx_xvbitclri_d((__m256i)d, 63); }
++static INLINE vdouble vneg_vd_vd(vdouble d) { return (vdouble)__lasx_xvbitrevi_d((__m256i)d, 63); }
++#if CONFIG == 1
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmadd_d(x, y, z); }
++// Use FMA with a sign-bit negation: FNMSUB has different signed-zero semantics for z - x*y.
++static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmadd_d(vneg_vd_vd(x), y, z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmsub_d(x, y, z); }
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(z, vmul_vd_vd_vd(x, y)); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
++static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmadd_d(x, y, z); }
++static INLINE vdouble vfmanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmadd_d(vneg_vd_vd(x), y, z); }
++static INLINE vdouble vfmapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lasx_xvfmsub_d(x, y, z); }
++static INLINE vdouble vmax_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfmax_d(x, y); }
++static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) { return __lasx_xvfmin_d(x, y); }
++
++static INLINE vdouble vsubadd_vd_vd_vd(vdouble x, vdouble y) { return vadd_vd_vd_vd(x, vnegpos_vd_vd(y)); }
++static INLINE vdouble vmlsubadd_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsubadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++
++static INLINE vopmask veq_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_ceq_d(x, y); }
++static INLINE vopmask vneq_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_cune_d(x, y); }
++static INLINE vopmask vlt_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_clt_d(x, y); }
++static INLINE vopmask vle_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_cle_d(x, y); }
++static INLINE vopmask vgt_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_clt_d(y, x); }
++static INLINE vopmask vge_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lasx_xvfcmp_cle_d(y, x); }
++
++static INLINE vint vadd_vi_vi_vi(vint x, vint y) { return x + y; }
++static INLINE vint vsub_vi_vi_vi(vint x, vint y) { return x - y; }
++static INLINE vint vneg_vi_vi(vint e) { return -e; }
++
++static INLINE vint vand_vi_vi_vi(vint x, vint y) { return x & y; }
++static INLINE vint vandnot_vi_vi_vi(vint x, vint y) {
++  return (vint)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vint vor_vi_vi_vi(vint x, vint y) { return x | y; }
++static INLINE vint vxor_vi_vi_vi(vint x, vint y) { return x ^ y; }
++
++static INLINE vint vand_vi_vo_vi(vopmask x, vint y) { return vreinterpretFirstHalf_vi_vi2((vint2)x) & y; }
++static INLINE vint vandnot_vi_vo_vi(vopmask x, vint y) {
++  return (vint)__lsx_vandn_v((__m128i)vreinterpretFirstHalf_vi_vi2((vint2)x), (__m128i)y);
++}
++
++#define vsll_vi_vi_i(x, c) ((vint)__lsx_vslli_w((__m128i)(x), (c)))
++//@#define vsll_vi_vi_i(x, c) ((vint)__lasx_xvslli_w((__m256i)(x), (c)))
++#define vsrl_vi_vi_i(x, c) ((vint)__lsx_vsrli_w((__m128i)(x), (c)))
++//@#define vsrl_vi_vi_i(x, c) ((vint)__lasx_xvsrli_w((__m256i)(x), (c)))
++#define vsra_vi_vi_i(x, c) ((vint)__lsx_vsrai_w((__m128i)(x), (c)))
++//@#define vsra_vi_vi_i(x, c) ((vint)__lasx_xvsrai_w((__m256i)(x), (c)))
++
++static INLINE vint veq_vi_vi_vi(vint x, vint y) { return x == y; }
++static INLINE vint vgt_vi_vi_vi(vint x, vint y) { return (vint)__lsx_vslt_w((__m128i)y, (__m128i)x); }
++
++static INLINE vopmask veq_vo_vi_vi(vint x, vint y) {
++  return (vopmask)vreinterpretFirstHalf_vi2_vi((vint)__lsx_vseq_w((__m128i)x, (__m128i)y));
++}
++static INLINE vopmask vgt_vo_vi_vi(vint x, vint y) {
++  return (vopmask)vreinterpretFirstHalf_vi2_vi((vint)__lsx_vslt_w((__m128i)y, (__m128i)x));
++}
++
++static INLINE vint vsel_vi_vo_vi_vi(vopmask m, vint x, vint y) {
++  return (vint)__lsx_vbitsel_v((__m128i)y, (__m128i)x,
++                               (__m128i)vreinterpretFirstHalf_vi_vi2((vint2)m));
++}
++
++static INLINE vopmask visinf_vo_vd(vdouble d) { return veq_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(SLEEF_INFINITY)); }
++static INLINE vopmask vispinf_vo_vd(vdouble d) { return veq_vo_vd_vd(d, vcast_vd_d(SLEEF_INFINITY)); }
++static INLINE vopmask visminf_vo_vd(vdouble d) { return veq_vo_vd_vd(d, vcast_vd_d(-SLEEF_INFINITY)); }
++static INLINE vopmask visnan_vo_vd(vdouble d) { return (vopmask)__lasx_xvfcmp_cune_d(d, d); }
++
++static INLINE vdouble vsqrt_vd_vd(vdouble d) {
++#if !defined(SLEEF_ENABLE_ALTSQRT)
++  return __lasx_xvfsqrt_d(d);
++#else
++#if defined(__clang__)
++  typedef int64_t vi64 __attribute__((ext_vector_type(VECTLENDP)));
++#else
++  typedef int64_t vi64 __attribute__((vector_size(sizeof(int64_t)*VECTLENDP)));
++#endif
++
++  vdouble q = vcast_vd_d(1);
++
++  vopmask o = (vopmask)(d < 8.636168555094445E-78);
++  d = vsel_vd_vo_vd_vd(o, d * 1.157920892373162E77, d);
++
++  q = vsel_vd_vo_vd_vd(o, vcast_vd_d(2.9387358770557188E-39), vcast_vd_d(1));
++
++  q = (vdouble)vor_vm_vm_vm(vlt_vo_vd_vd(d, vcast_vd_d(0)), (vmask)q);
++
++  vdouble x = (vdouble)(0x5fe6ec85e7de30daLL - ((vi64)(d + 1e-320) >> 1));
++  x = x * (  3 - d * x * x);
++  x = x * ( 12 - d * x * x);
++  x = x * (768 - d * x * x);
++  x *= 1.0 / (1 << 13);
++  x = (d - (d * x) * (d * x)) * (x * 0.5) + d * x;
++
++  return x * q;
++#endif
++}
++
++static INLINE double vcast_d_vd(vdouble v) { return v[0]; }
++static INLINE float vcast_f_vf(vfloat v) { return v[0]; }
++
++static INLINE vdouble vload_vd_p(const double *ptr) { return (vdouble)__lasx_xvld(ptr, 0); }
++static INLINE vdouble vloadu_vd_p(const double *ptr) {
++  return (vdouble)__lasx_xvld(ptr, 0);
++}
++
++static INLINE vdouble vgather_vd_p_vi(const double *ptr, vint vi) {
++  vdouble vd;
++  for(int i=0;i<VECTLENDP;i++) vd[i] = ptr[vi[i]];
++  return vd;
++}
++
++static INLINE void vstore_v_p_vd(double *ptr, vdouble v) { __lasx_xvst((__m256i)v, ptr, 0); }
++static INLINE void vstoreu_v_p_vd(double *ptr, vdouble v) {
++  __lasx_xvst((__m256i)v, ptr, 0);
++}
++static INLINE void vstream_v_p_vd(double *ptr, vdouble v) { *(vdouble *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vd(double *ptr, int offset, int step, vdouble v) {
++  for(int i=0;i<VECTLENDP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vd(double *ptr, int offset, int step, vdouble v) { vscatter2_v_p_i_i_vd(ptr, offset, step, v); }
++
++//
++
++static INLINE vfloat vsel_vf_vo_vf_vf(vopmask o, vfloat x, vfloat y) {
++  return (vfloat)__lasx_xvbitsel_v((__m256i)y, (__m256i)x, (__m256i)o);
++}
++
++static INLINE CONST vfloat vsel_vf_vo_f_f(vopmask o, float v1, float v0) {
++  return vsel_vf_vo_vf_vf(o, vcast_vf_f(v1), vcast_vf_f(v0));
++}
++
++static INLINE vfloat vsel_vf_vo_vo_f_f_f(vopmask o0, vopmask o1, float d0, float d1, float d2) {
++  return vsel_vf_vo_vf_vf(o0, vcast_vf_f(d0), vsel_vf_vo_f_f(o1, d1, d2));
++}
++
++static INLINE vfloat vsel_vf_vo_vo_vo_f_f_f_f(vopmask o0, vopmask o1, vopmask o2, float d0, float d1, float d2, float d3) {
++  return vsel_vf_vo_vf_vf(o0, vcast_vf_f(d0), vsel_vf_vo_vf_vf(o1, vcast_vf_f(d1), vsel_vf_vo_f_f(o2, d2, d3)));
++}
++
++static INLINE vint2 vcast_vi2_vm(vmask vm) { return (vint2)vm; }
++static INLINE vmask vcast_vm_vi2(vint2 vi) { return (vmask)vi; }
++
++static INLINE vfloat vcast_vf_vi2(vint2 vi) { return __lasx_xvffint_s_w((__m256i)vi); }
++
++static INLINE vint2 vtruncate_vi2_vf(vfloat vf) { return (vint2)__lasx_xvftintrz_w_s(vf); }
++
++static INLINE vint2 vrint_vi2_vf(vfloat vf) { return (vint2)__lasx_xvftintrne_w_s(vf); }
++static INLINE vfloat vtruncate_vf_vf(vfloat vd) { return __lasx_xvfrintrz_s(vd); }
++static INLINE vfloat vrint_vf_vf(vfloat vd) { return __lasx_xvfrintrne_s(vd); }
++
++static INLINE vmask vreinterpret_vm_vf(vfloat vf) { return (vmask)vf; }
++static INLINE vfloat vreinterpret_vf_vm(vmask vm) { return (vfloat)vm; }
++static INLINE vfloat vreinterpret_vf_vi2(vint2 vi) { return (vfloat)vi; }
++static INLINE vint2 vreinterpret_vi2_vf(vfloat vf) { return (vint2)vf; }
++
++static INLINE vfloat vadd_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfadd_s(x, y); }
++static INLINE vfloat vsub_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfsub_s(x, y); }
++static INLINE vfloat vmul_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfmul_s(x, y); }
++static INLINE vfloat vdiv_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfdiv_s(x, y); }
++static INLINE vfloat vrec_vf_vf(vfloat x) { return __lasx_xvfrecip_s(x); }
++
++static INLINE vfloat vabs_vf_vf(vfloat f) { return (vfloat)__lasx_xvbitclri_w((__m256i)f, 31); }
++static INLINE vfloat vneg_vf_vf(vfloat d) { return (vfloat)__lasx_xvbitrevi_w((__m256i)d, 31); }
++#if CONFIG == 1
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmadd_s(x, y, z); }
++// FNMSUB computes -(x*y-z), which has different signed-zero semantics
++// from the required fma(-x, y, z).
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmadd_s(vneg_vf_vf(x), y, z); }
++static INLINE vfloat vmlapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmsub_s(x, y, z); }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++static INLINE vfloat vmlapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++#endif
++static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmadd_s(x, y, z); }
++static INLINE vfloat vfmanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmadd_s(vneg_vf_vf(x), y, z); }
++static INLINE vfloat vfmapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lasx_xvfmsub_s(x, y, z); }
++static INLINE vfloat vmax_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfmax_s(x, y); }
++static INLINE vfloat vmin_vf_vf_vf(vfloat x, vfloat y) { return __lasx_xvfmin_s(x, y); }
++
++static INLINE vfloat vsubadd_vf_vf_vf(vfloat x, vfloat y) { return vadd_vf_vf_vf(x, vnegpos_vf_vf(y)); }
++static INLINE vfloat vmlsubadd_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsubadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++
++static INLINE vopmask veq_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_ceq_s(x, y); }
++static INLINE vopmask vneq_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_cune_s(x, y); }
++static INLINE vopmask vlt_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_clt_s(x, y); }
++static INLINE vopmask vle_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_cle_s(x, y); }
++static INLINE vopmask vgt_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_clt_s(y, x); }
++static INLINE vopmask vge_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lasx_xvfcmp_cle_s(y, x); }
++
++static INLINE vint2 vadd_vi2_vi2_vi2(vint2 x, vint2 y) { return x + y; }
++static INLINE vint2 vsub_vi2_vi2_vi2(vint2 x, vint2 y) { return x - y; }
++static INLINE vint2 vneg_vi2_vi2(vint2 e) { return -e; }
++
++static INLINE vint2 vand_vi2_vi2_vi2(vint2 x, vint2 y) { return x & y; }
++static INLINE vint2 vandnot_vi2_vi2_vi2(vint2 x, vint2 y) {
++  return (vint2)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++static INLINE vint2 vor_vi2_vi2_vi2(vint2 x, vint2 y) { return x | y; }
++static INLINE vint2 vxor_vi2_vi2_vi2(vint2 x, vint2 y) { return x ^ y; }
++
++static INLINE vint2 vand_vi2_vo_vi2(vopmask x, vint2 y) { return (vint2)x & y; }
++static INLINE vint2 vandnot_vi2_vo_vi2(vopmask x, vint2 y) {
++  return (vint2)__lasx_xvandn_v((__m256i)x, (__m256i)y);
++}
++
++#define vsll_vi2_vi2_i(x, c) ((vint2)__lasx_xvslli_w((__m256i)(x), (c)))
++//@#define vsll_vi2_vi2_i(x, c) ((vint2)__lasx_xvslli_w((__m256i)(x), (c)))
++#define vsrl_vi2_vi2_i(x, c) ((vint2)__lasx_xvsrli_w((__m256i)(x), (c)))
++//@#define vsrl_vi2_vi2_i(x, c) ((vint2)__lasx_xvsrli_w((__m256i)(x), (c)))
++#define vsra_vi2_vi2_i(x, c) ((vint2)__lasx_xvsrai_w((__m256i)(x), (c)))
++//@#define vsra_vi2_vi2_i(x, c) ((vint2)__lasx_xvsrai_w((__m256i)(x), (c)))
++
++static INLINE vopmask veq_vo_vi2_vi2(vint2 x, vint2 y) { return (vopmask)(x == y); }
++static INLINE vopmask vgt_vo_vi2_vi2(vint2 x, vint2 y) { return (vopmask)__lasx_xvslt_w((__m256i)y, (__m256i)x); }
++static INLINE vint2 veq_vi2_vi2_vi2(vint2 x, vint2 y) { return x == y; }
++static INLINE vint2 vgt_vi2_vi2_vi2(vint2 x, vint2 y) { return (vint2)__lasx_xvslt_w((__m256i)y, (__m256i)x); }
++
++static INLINE vopmask visinf_vo_vf(vfloat d) { return veq_vo_vf_vf(vabs_vf_vf(d), vcast_vf_f(SLEEF_INFINITYf)); }
++static INLINE vopmask vispinf_vo_vf(vfloat d) { return veq_vo_vf_vf(d, vcast_vf_f(SLEEF_INFINITYf)); }
++static INLINE vopmask visminf_vo_vf(vfloat d) { return veq_vo_vf_vf(d, vcast_vf_f(-SLEEF_INFINITYf)); }
++static INLINE vopmask visnan_vo_vf(vfloat d) { return (vopmask)__lasx_xvfcmp_cune_s(d, d); }
++
++static INLINE vfloat vsqrt_vf_vf(vfloat d) {
++#if !defined(SLEEF_ENABLE_ALTSQRT)
++  return __lasx_xvfsqrt_s(d);
++#else
++  vfloat q = vcast_vf_f(1);
++
++  vopmask o = (vopmask)(d < 5.4210108624275221700372640043497e-20f); // 2^-64
++  d = vsel_vf_vo_vf_vf(o, d * vcast_vf_f(18446744073709551616.0f), d); // 2^64
++  q = vsel_vf_vo_vf_vf(o, vcast_vf_f(0.00000000023283064365386962890625f), vcast_vf_f(1)); // 2^-32
++  q = (vfloat)vor_vm_vm_vm(vlt_vo_vf_vf(d, vcast_vf_f(0)), (vmask)q);
++
++  vfloat x = (vfloat)(0x5f330de2 - (((vint2)d) >> 1));
++  x = x * ( 3.0f - d * x * x);
++  x = x * (12.0f - d * x * x);
++  x *= 0.0625f;
++  x = (d - (d * x) * (d * x)) * (x * 0.5) + d * x;
++
++  return x * q;
++#endif
++}
++
++static INLINE vfloat vload_vf_p(const float *ptr) { return (vfloat)__lasx_xvld(ptr, 0); }
++static INLINE vfloat vloadu_vf_p(const float *ptr) {
++  return (vfloat)__lasx_xvld(ptr, 0);
++}
++
++static INLINE vfloat vgather_vf_p_vi2(const float *ptr, vint2 vi2) {
++  vfloat vf;
++  for(int i=0;i<VECTLENSP;i++) vf[i] = ptr[vi2[i]];
++  return vf;
++}
++
++static INLINE void vstore_v_p_vf(float *ptr, vfloat v) { __lasx_xvst((__m256i)v, ptr, 0); }
++static INLINE void vstoreu_v_p_vf(float *ptr, vfloat v) {
++  __lasx_xvst((__m256i)v, ptr, 0);
++}
++static INLINE void vstream_v_p_vf(float *ptr, vfloat v) { *(vfloat *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vf(float *ptr, int offset, int step, vfloat v) {
++  for(int i=0;i<VECTLENSP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vf(float *ptr, int offset, int step, vfloat v) { vscatter2_v_p_i_i_vf(ptr, offset, step, v); }
++
++//
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vadd_vl_vl_vl(vlongdouble x, vlongdouble y) { return x + y; }
++static INLINE vlongdouble vsub_vl_vl_vl(vlongdouble x, vlongdouble y) { return x - y; }
++static INLINE vlongdouble vmul_vl_vl_vl(vlongdouble x, vlongdouble y) { return x * y; }
++
++static INLINE vlongdouble vneg_vl_vl(vlongdouble d) { return -d; }
++static INLINE vlongdouble vsubadd_vl_vl_vl(vlongdouble x, vlongdouble y) { return vadd_vl_vl_vl(x, vnegpos_vl_vl(y)); }
++static INLINE vlongdouble vmlsubadd_vl_vl_vl_vl(vlongdouble x, vlongdouble y, vlongdouble z) { return vsubadd_vl_vl_vl(vmul_vl_vl_vl(x, y), z); }
++
++static INLINE vlongdouble vload_vl_p(const long double *ptr) { return *(vlongdouble *)ptr; }
++static INLINE vlongdouble vloadu_vl_p(const long double *ptr) {
++  vlongdouble vd;
++  for(int i=0;i<VECTLENDP;i++) vd[i] = ptr[i];
++  return vd;
++}
++
++static INLINE void vstore_v_p_vl(long double *ptr, vlongdouble v) { *(vlongdouble *)ptr = v; }
++static INLINE void vstoreu_v_p_vl(long double *ptr, vlongdouble v) {
++  for(int i=0;i<VECTLENDP;i++) ptr[i] = v[i];
++}
++static INLINE void vstream_v_p_vl(long double *ptr, vlongdouble v) { *(vlongdouble *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vl(long double *ptr, int offset, int step, vlongdouble v) {
++  for(int i=0;i<VECTLENDP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vl(long double *ptr, int offset, int step, vlongdouble v) { vscatter2_v_p_i_i_vl(ptr, offset, step, v); }
++#endif
++
++#if defined(Sleef_quad2_DEFINED) && defined(ENABLEFLOAT128)
++/* vquad is an opaque pair of vector-sized bit containers. */
++static vquad loadu_vq_p(void *p) {
++  vquad vd;
++  memcpy(&vd, p, VECTLENDP * 16);
++  return vd;
++}
++
++static INLINE vquad cast_vq_aq(vargquad aq) {
++  vquad vq;
++  memcpy(&vq, &aq, VECTLENDP * 16);
++  return vq;
++}
++
++static INLINE vargquad cast_aq_vq(vquad vq) {
++  vargquad aq;
++  memcpy(&aq, &vq, VECTLENDP * 16);
++  return aq;
++}
++#endif
+diff --git a/src/arch/helperlsx.h b/src/arch/helperlsx.h
+new file mode 100644
+index 000000000..e8720ec88
+--- /dev/null
++++ b/src/arch/helperlsx.h
+@@ -0,0 +1,849 @@
++/* LoongArch LSX ISA backend. */
++#if !defined(__loongarch_sx) && !defined(SLEEF_GENHEADER)
++#error Please specify -mlsx.
++#endif
++
++#if !defined(SLEEF_GENHEADER)
++#include <lsxintrin.h>
++#include <stdint.h>
++#include "misc.h"
++#endif
++
++#ifndef CONFIG
++#error CONFIG macro not defined
++#endif
++
++#define ENABLE_DP
++//@#define ENABLE_DP
++#define ENABLE_SP
++//@#define ENABLE_SP
++#define LOG2VECTLENDP 1
++//@#define LOG2VECTLENDP 1
++#define VECTLENDP (1 << LOG2VECTLENDP)
++//@#define VECTLENDP (1 << LOG2VECTLENDP)
++#define LOG2VECTLENSP (LOG2VECTLENDP + 1)
++//@#define LOG2VECTLENSP (LOG2VECTLENDP + 1)
++#define VECTLENSP (1 << LOG2VECTLENSP)
++//@#define VECTLENSP (1 << LOG2VECTLENSP)
++#define DFTPRIORITY LOG2VECTLENDP
++#define FULL_FP_ROUNDING
++//@#define FULL_FP_ROUNDING
++#define ACCURATE_SQRT
++//@#define ACCURATE_SQRT
++#define ISANAME "LoongArch LSX"
++#if CONFIG == 1
++#define ENABLE_FMA_DP
++//@#define ENABLE_FMA_DP
++#define ENABLE_FMA_SP
++//@#define ENABLE_FMA_SP
++#endif
++
++typedef v4i32 vmask;
++typedef v4i32 vopmask;
++typedef __m128 vfloat;
++typedef v4i32 vint2;
++typedef __m128d vdouble;
++typedef v4i32 vint;
++typedef v2i64 vint64;
++typedef v2u64 vuint64;
++
++typedef struct { vmask x, y; } vquad;
++typedef vquad vargquad;
++
++#if VECTLENDP == 2
++static INLINE vopmask vcast_vo32_vo64(vopmask m) {
++  return (vopmask)__lsx_vpickod_w((__m128i)m, (__m128i)m);
++}
++static INLINE vopmask vcast_vo64_vo32(vopmask m) {
++  return (vopmask)__lsx_vilvl_w((__m128i)m, (__m128i)m);
++}
++
++static INLINE vint vcast_vi_i(int i) { return (vint)__lsx_vreplgr2vr_w(i); }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2)__lsx_vreplgr2vr_w(i); }
++static INLINE vfloat vcast_vf_f(float f) { union { float f; int32_t i; } u = { f }; return (vfloat)__lsx_vreplgr2vr_w(u.i); }
++static INLINE vdouble vcast_vd_d(double d) { union { double d; int64_t i; } u = { d }; return (vdouble)__lsx_vreplgr2vr_d(u.i); }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d }; }
++#endif
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) {
++  return (vint2)__lsx_vilvl_w((__m128i)vi, __lsx_vreplgr2vr_w(0));
++}
++static INLINE vint vcastu_vi_vi2(vint2 vi2) {
++  return (vint)__lsx_vpickod_w((__m128i)vi2, (__m128i)vi2);
++}
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) { return (vint)vi2; }
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) {
++  return (vint2)__lsx_vpickev_d(__lsx_vreplgr2vr_d(0), (__m128i)vi);
++}
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble)__lsx_vshuf4i_w((__m128i)vd, 0x4e); }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return vd; }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) { return (vfloat)__lsx_vshuf4i_w((__m128i)vd, 0xb1); }
++static INLINE vfloat vreva2_vf_vf(vfloat vd) { return (vfloat)__lsx_vshuf4i_w((__m128i)vd, 0x4e); }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return vd; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1] }; }
++#endif
++
++#define PNMASK ((vdouble) { +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++#elif VECTLENDP == 4
++static INLINE vopmask vcast_vo32_vo64(vopmask m) { return (vopmask){ m[1], m[3], m[5], m[7], 0, 0, 0, 0 }; }
++static INLINE vopmask vcast_vo64_vo32(vopmask m) { return (vopmask){ m[0], m[0], m[1], m[1], m[2], m[2], m[3], m[3] }; }
++
++static INLINE vint vcast_vi_i(int i) { return (vint) { i, i, i, i }; }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2) { i, i, i, i, i, i, i, i }; }
++static INLINE vfloat vcast_vf_f(float f) { return (vfloat) { f, f, f, f, f, f, f, f }; }
++static INLINE vdouble vcast_vd_d(double d) { return (vdouble) { d, d, d, d }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d, d, d }; }
++#endif
++
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h, l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) { return (vint2){ 0, vi[0], 0, vi[1], 0, vi[2], 0, vi[3] }; }
++static INLINE vint vcastu_vi_vi2(vint2 vi2) { return (vint){ vi2[1], vi2[3], vi2[5], vi2[7] }; }
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) { return (vint){ vi2[0], vi2[1], vi2[2], vi2[3] }; }
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) { return (vint2){ vi[0], vi[1], vi[2], vi[3], 0, 0, 0, 0 }; }
++
++#define PNMASK ((vdouble) { +0.0, -0.0, +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0, -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble) { vd[1], vd[0], vd[3], vd[2] }; }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return (vdouble) { vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) { return (vfloat) { vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6] }; }
++static INLINE vfloat vreva2_vf_vf(vfloat vd) { return (vfloat) { vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1] }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0], vd[3], vd[2] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1], +vd[2], -vd[3] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1], -vd[2], +vd[3] }; }
++#endif
++#elif VECTLENDP == 8
++static INLINE vopmask vcast_vo32_vo64(vopmask m) { return (vopmask){ m[1], m[3], m[5], m[7], m[9], m[11], m[13], m[15], 0, 0, 0, 0, 0, 0, 0, 0 }; }
++static INLINE vopmask vcast_vo64_vo32(vopmask m) { return (vopmask){ m[0], m[0], m[1], m[1], m[2], m[2], m[3], m[3], m[4], m[4], m[5], m[5], m[6], m[6], m[7], m[7] }; }
++
++static INLINE vint vcast_vi_i(int i) { return (vint) { i, i, i, i, i, i, i, i }; }
++static INLINE vint2 vcast_vi2_i(int i) { return (vint2) { i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i }; }
++static INLINE vfloat vcast_vf_f(float f) { return (vfloat) { f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f }; }
++static INLINE vdouble vcast_vd_d(double d) { return (vdouble) { d, d, d, d, d, d, d, d }; }
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) { return (vlongdouble) { d, d, d, d, d, d, d, d }; }
++#endif
++
++static INLINE vmask vcast_vm_i_i(int h, int l) { return (vmask){ l, h, l, h, l, h, l, h, l, h, l, h, l, h, l, h }; }
++static INLINE vint2 vcastu_vi2_vi(vint vi) { return (vint2){ 0, vi[0], 0, vi[1], 0, vi[2], 0, vi[3], 0, vi[4], 0, vi[5], 0, vi[6], 0, vi[7] }; }
++static INLINE vint vcastu_vi_vi2(vint2 vi2) { return (vint){ vi2[1], vi2[3], vi2[5], vi2[7], vi2[9], vi2[11], vi2[13], vi2[15] }; }
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) { return (vint){ vi2[0], vi2[1], vi2[2], vi2[3], vi2[4], vi2[5], vi2[6], vi2[7] }; }
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) { return (vint2){ vi[0], vi[1], vi[2], vi[3], vi[4], vi[5], vi[6], vi[7], 0, 0, 0, 0, 0, 0, 0, 0 }; }
++
++#define PNMASK ((vdouble) { +0.0, -0.0, +0.0, -0.0, +0.0, -0.0, +0.0, -0.0 })
++#define NPMASK ((vdouble) { -0.0, +0.0, -0.0, +0.0, -0.0, +0.0, -0.0, +0.0 })
++static INLINE vdouble vposneg_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)PNMASK); }
++static INLINE vdouble vnegpos_vd_vd(vdouble d) { return (vdouble)((vmask)d ^ (vmask)NPMASK); }
++
++#define PNMASKf ((vfloat) { +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f })
++#define NPMASKf ((vfloat) { -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f, -0.0f, +0.0f })
++static INLINE vfloat vposneg_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)PNMASKf); }
++static INLINE vfloat vnegpos_vf_vf(vfloat d) { return (vfloat)((vmask)d ^ (vmask)NPMASKf); }
++
++static INLINE vdouble vrev21_vd_vd(vdouble vd) { return (vdouble) { vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6] }; }
++static INLINE vdouble vreva2_vd_vd(vdouble vd) { return (vdouble) { vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vfloat vrev21_vf_vf(vfloat vd) {
++  return (vfloat) {
++    vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6],
++      vd[9], vd[8], vd[11], vd[10], vd[13], vd[12], vd[15], vd[14] };
++}
++static INLINE vfloat vreva2_vf_vf(vfloat vd) {
++  return (vfloat) {
++    vd[14], vd[15], vd[12], vd[13], vd[10], vd[11], vd[8], vd[9],
++      vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1]};
++}
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[1], vd[0], vd[3], vd[2], vd[5], vd[4], vd[7], vd[6] }; }
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble vd) { return (vlongdouble) { vd[6], vd[7], vd[4], vd[5], vd[2], vd[3], vd[0], vd[1] }; }
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble vd) { return (vlongdouble) { +vd[0], -vd[1], +vd[2], -vd[3], +vd[4], -vd[5], +vd[6], -vd[7] }; }
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble vd) { return (vlongdouble) { -vd[0], +vd[1], -vd[2], +vd[3], -vd[4], +vd[5], -vd[6], +vd[7] }; }
++#endif
++#else
++static INLINE vint vcast_vi_i(int k) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = k;
++  return ret;
++}
++
++static INLINE vint2 vcast_vi2_i(int k) {
++  vint2 ret;
++  for(int i=0;i<VECTLENSP;i++) ret[i] = k;
++  return ret;
++}
++
++static INLINE vdouble vcast_vd_d(double d) {
++  vdouble ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = d;
++  return ret;
++}
++
++static INLINE vfloat vcast_vf_f(float f) {
++  vfloat ret;
++  for(int i=0;i<VECTLENSP;i++) ret[i] = f;
++  return ret;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vcast_vl_l(long double d) {
++  vlongdouble ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = d;
++  return ret;
++}
++#endif
++
++static INLINE vopmask vcast_vo32_vo64(vopmask m) {
++  vopmask ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = m[i*2+1];
++  for(int i=VECTLENDP;i<VECTLENDP*2;i++) ret[i] = 0;
++  return ret;
++}
++
++static INLINE vopmask vcast_vo64_vo32(vopmask m) {
++  vopmask ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i*2] = ret[i*2+1] = m[i];
++  return ret;
++}
++
++static INLINE vmask vcast_vm_i_i(int h, int l) {
++  vmask ret;
++  for(int i=0;i<VECTLENDP;i++) {
++    ret[i*2+0] = l;
++    ret[i*2+1] = h;
++  }
++  return ret;
++}
++
++static INLINE vint2 vcastu_vi2_vi(vint vi) {
++  vint2 ret;
++  for(int i=0;i<VECTLENDP;i++) {
++    ret[i*2+0] = 0;
++    ret[i*2+1] = vi[i];
++  }
++  return ret;
++}
++
++static INLINE vint vcastu_vi_vi2(vint2 vi2) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi2[i*2+1];
++  return ret;
++}
++
++static INLINE vint vreinterpretFirstHalf_vi_vi2(vint2 vi2) {
++  vint ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi2[i];
++  return ret;
++}
++
++static INLINE vint2 vreinterpretFirstHalf_vi2_vi(vint vi) {
++  vint2 ret;
++  for(int i=0;i<VECTLENDP;i++) ret[i] = vi[i];
++  for(int i=VECTLENDP;i<VECTLENDP*2;i++) ret[i] = 0;
++  return ret;
++}
++
++static INLINE vdouble vrev21_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vdouble vreva2_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[(VECTLENDP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENDP/2-1-i)*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vrev21_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vfloat vreva2_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = d0[(VECTLENSP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENSP/2-1-i)*2+1];
++  }
++  return r;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vrev21_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[i*2+1];
++    r[i*2+1] = d0[i*2+0];
++  }
++  return r;
++}
++
++static INLINE vlongdouble vreva2_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = d0[(VECTLENDP/2-1-i)*2+0];
++    r[i*2+1] = d0[(VECTLENDP/2-1-i)*2+1];
++  }
++  return r;
++}
++#endif
++
++static INLINE vdouble vposneg_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vdouble vnegpos_vd_vd(vdouble d0) {
++  vdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vposneg_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vfloat vnegpos_vf_vf(vfloat d0) {
++  vfloat r;
++  for(int i=0;i<VECTLENSP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vposneg_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = +d0[i*2+0];
++    r[i*2+1] = -d0[i*2+1];
++  }
++  return r;
++}
++
++static INLINE vlongdouble vnegpos_vl_vl(vlongdouble d0) {
++  vlongdouble r;
++  for(int i=0;i<VECTLENDP/2;i++) {
++    r[i*2+0] = -d0[i*2+0];
++    r[i*2+1] = +d0[i*2+1];
++  }
++  return r;
++}
++#endif
++#endif
++
++//
++
++static INLINE int vavailability_i(int name) { return -1; }
++static INLINE void vprefetch_v_p(const void *ptr) { }
++
++static INLINE int vtestallones_i_vo64(vopmask g) {
++  return __lsx_bnz_d((__m128i)g);
++}
++
++static INLINE int vtestallones_i_vo32(vopmask g) {
++  return __lsx_bnz_w((__m128i)g);
++}
++
++//
++
++static vint2 vloadu_vi2_p(int32_t *p) {
++  return (vint2)__lsx_vld(p, 0);
++}
++
++static void vstoreu_v_p_vi2(int32_t *p, vint2 v) {
++  __lsx_vst((__m128i)v, p, 0);
++}
++
++static vint vloadu_vi_p(int32_t *p) {
++  return (vint)__lsx_vldrepl_d(p, 0);
++}
++
++static void vstoreu_v_p_vi(int32_t *p, vint v) {
++  __lsx_vstelm_d((__m128i)v, p, 0, 0);
++}
++
++//
++
++static INLINE vmask vand_vm_vm_vm(vmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vm_vm(vmask x, vmask y) {
++  return (vmask)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vmask vor_vm_vm_vm(vmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vm_vm(vmask x, vmask y) { return x ^ y; }
++
++static INLINE vopmask vand_vo_vo_vo(vopmask x, vopmask y) { return x & y; }
++static INLINE vopmask vandnot_vo_vo_vo(vopmask x, vopmask y) {
++  return (vopmask)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vopmask vor_vo_vo_vo(vopmask x, vopmask y) { return x | y; }
++static INLINE vopmask vxor_vo_vo_vo(vopmask x, vopmask y) { return x ^ y; }
++
++static INLINE vmask vand_vm_vo64_vm(vopmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vo64_vm(vopmask x, vmask y) {
++  return (vmask)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vmask vor_vm_vo64_vm(vopmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vo64_vm(vopmask x, vmask y) { return x ^ y; }
++
++static INLINE vmask vand_vm_vo32_vm(vopmask x, vmask y) { return x & y; }
++static INLINE vmask vandnot_vm_vo32_vm(vopmask x, vmask y) {
++  return (vmask)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vmask vor_vm_vo32_vm(vopmask x, vmask y) { return x | y; }
++static INLINE vmask vxor_vm_vo32_vm(vopmask x, vmask y) { return x ^ y; }
++
++//
++
++static INLINE vdouble vsel_vd_vo_vd_vd(vopmask o, vdouble x, vdouble y) {
++  return (vdouble)__lsx_vbitsel_v((__m128i)y, (__m128i)x, (__m128i)o);
++}
++static INLINE vint2 vsel_vi2_vo_vi2_vi2(vopmask o, vint2 x, vint2 y) {
++  return (vint2)__lsx_vbitsel_v((__m128i)y, (__m128i)x, (__m128i)o);
++}
++
++static INLINE CONST vdouble vsel_vd_vo_d_d(vopmask o, double v1, double v0) {
++  return vsel_vd_vo_vd_vd(o, vcast_vd_d(v1), vcast_vd_d(v0));
++}
++
++static INLINE vdouble vsel_vd_vo_vo_d_d_d(vopmask o0, vopmask o1, double d0, double d1, double d2) {
++  return vsel_vd_vo_vd_vd(o0, vcast_vd_d(d0), vsel_vd_vo_d_d(o1, d1, d2));
++}
++
++static INLINE vdouble vsel_vd_vo_vo_vo_d_d_d_d(vopmask o0, vopmask o1, vopmask o2, double d0, double d1, double d2, double d3) {
++  return vsel_vd_vo_vd_vd(o0, vcast_vd_d(d0), vsel_vd_vo_vd_vd(o1, vcast_vd_d(d1), vsel_vd_vo_d_d(o2, d2, d3)));
++}
++
++static INLINE vdouble vcast_vd_vi(vint vi) { return __lsx_vffintl_d_w((__m128i)vi); }
++static INLINE vint vtruncate_vi_vd(vdouble vd) { return (vint)__lsx_vftintrz_w_d(vd, vd); }
++static INLINE vint vrint_vi_vd(vdouble vd) { return (vint)__lsx_vftintrne_w_d(vd, vd); }
++static INLINE vdouble vtruncate_vd_vd(vdouble vd) { return __lsx_vfrintrz_d(vd); }
++static INLINE vdouble vrint_vd_vd(vdouble vd) { return __lsx_vfrintrne_d(vd); }
++
++static INLINE vopmask veq64_vo_vm_vm(vmask x, vmask y) {
++  return (vopmask)__lsx_vseq_d((__m128i)x, (__m128i)y);
++}
++
++static INLINE vmask vadd64_vm_vm_vm(vmask x, vmask y) { return (vmask)__lsx_vadd_d((__m128i)x, (__m128i)y); }
++
++static INLINE vmask vcast_vm_i64(int64_t i) { return (vmask)__lsx_vreplgr2vr_d(i); }
++static INLINE vmask vcast_vm_u64(uint64_t i) { return (vmask)__lsx_vreplgr2vr_d((long long)i); }
++static INLINE vmask vcastu_vm_vi(vint vi) {
++  return (vmask)__lsx_vilvl_w((__m128i)vi, __lsx_vreplgr2vr_w(0));
++}
++static INLINE vint vcastu_vi_vm(vmask vm) {
++  return (vint)__lsx_vpickod_w((__m128i)vm, (__m128i)vm);
++}
++static INLINE vmask vcast_vm_vi(vint vi) {
++  return (vmask)__lsx_vsllwil_d_w((__m128i)vi, 0);
++}
++static INLINE vint vcast_vi_vm(vmask vm) {
++  return (vint)__lsx_vpickev_w((__m128i)vm, (__m128i)vm);
++}
++static INLINE vmask vsel_vm_vo64_vm_vm(vopmask m, vmask x, vmask y) {
++  return (vmask)__lsx_vbitsel_v((__m128i)y, (__m128i)x, (__m128i)m);
++}
++static INLINE vmask vsub64_vm_vm_vm(vmask x, vmask y) { return (vmask)__lsx_vsub_d((__m128i)x, (__m128i)y); }
++static INLINE vmask vneg64_vm_vm(vmask x) { return (vmask)__lsx_vneg_d((__m128i)x); }
++static INLINE vopmask vgt64_vo_vm_vm(vmask x, vmask y) { return (vopmask)__lsx_vslt_d((__m128i)y, (__m128i)x); }
++#define vsll64_vm_vm_i(x, c) ((vmask)__lsx_vslli_d((__m128i)(x), c))
++//@#define vsll64_vm_vm_i(x, c) ((vmask)__lsx_vslli_d((__m128i)(x), c))
++#define vsrl64_vm_vm_i(x, c) ((vmask)__lsx_vsrli_d((__m128i)(x), c))
++//@#define vsrl64_vm_vm_i(x, c) ((vmask)__lsx_vsrli_d((__m128i)(x), c))
++
++//
++
++static INLINE vmask vreinterpret_vm_vd(vdouble vd) { return (vmask)vd; }
++static INLINE vmask vreinterpret_vm_vi64(vint64 vi) { return (vmask)vi; }
++static INLINE vint2 vreinterpret_vi2_vd(vdouble vd) { return (vint2)vd; }
++static INLINE vdouble vreinterpret_vd_vi2(vint2 vi) { return (vdouble)vi; }
++static INLINE vdouble vreinterpret_vd_vm(vmask vm) { return (vdouble)vm; }
++
++static INLINE vdouble vadd_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfadd_d(x, y); }
++static INLINE vdouble vsub_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfsub_d(x, y); }
++static INLINE vdouble vmul_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfmul_d(x, y); }
++static INLINE vdouble vdiv_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfdiv_d(x, y); }
++static INLINE vdouble vrec_vd_vd(vdouble x) { return __lsx_vfrecip_d(x); }
++
++static INLINE vdouble vabs_vd_vd(vdouble d) { return (vdouble)__lsx_vbitclri_d((__m128i)d, 63); }
++static INLINE vdouble vneg_vd_vd(vdouble d) { return (vdouble)__lsx_vbitrevi_d((__m128i)d, 63); }
++#if CONFIG == 1
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmadd_d(x, y, z); }
++// FNMSUB computes -(x*y-z), which has different signed-zero semantics
++// from the required fma(-x, y, z).
++static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmadd_d(vneg_vd_vd(x), y, z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmsub_d(x, y, z); }
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(z, vmul_vd_vd_vd(x, y)); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
++static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmadd_d(x, y, z); }
++static INLINE vdouble vfmanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmadd_d(vneg_vd_vd(x), y, z); }
++static INLINE vdouble vfmapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return __lsx_vfmsub_d(x, y, z); }
++static INLINE vdouble vmax_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfmax_d(x, y); }
++static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) { return __lsx_vfmin_d(x, y); }
++
++static INLINE vdouble vsubadd_vd_vd_vd(vdouble x, vdouble y) { return vadd_vd_vd_vd(x, vnegpos_vd_vd(y)); }
++static INLINE vdouble vmlsubadd_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsubadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++
++static INLINE vopmask veq_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_ceq_d(x, y); }
++static INLINE vopmask vneq_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_cune_d(x, y); }
++static INLINE vopmask vlt_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_clt_d(x, y); }
++static INLINE vopmask vle_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_cle_d(x, y); }
++static INLINE vopmask vgt_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_clt_d(y, x); }
++static INLINE vopmask vge_vo_vd_vd(vdouble x, vdouble y) { return (vopmask)__lsx_vfcmp_cle_d(y, x); }
++
++static INLINE vint vadd_vi_vi_vi(vint x, vint y) { return x + y; }
++static INLINE vint vsub_vi_vi_vi(vint x, vint y) { return x - y; }
++static INLINE vint vneg_vi_vi(vint e) { return -e; }
++
++static INLINE vint vand_vi_vi_vi(vint x, vint y) { return x & y; }
++static INLINE vint vandnot_vi_vi_vi(vint x, vint y) {
++  return (vint)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vint vor_vi_vi_vi(vint x, vint y) { return x | y; }
++static INLINE vint vxor_vi_vi_vi(vint x, vint y) { return x ^ y; }
++
++static INLINE vint vand_vi_vo_vi(vopmask x, vint y) { return vreinterpretFirstHalf_vi_vi2((vint2)x) & y; }
++static INLINE vint vandnot_vi_vo_vi(vopmask x, vint y) {
++  return (vint)__lsx_vandn_v((__m128i)vreinterpretFirstHalf_vi_vi2((vint2)x), (__m128i)y);
++}
++
++#define vsll_vi_vi_i(x, c) ((vint)__lsx_vslli_w((__m128i)(x), (c)))
++//@#define vsll_vi_vi_i(x, c) ((vint)__lsx_vslli_w((__m128i)(x), (c)))
++#define vsrl_vi_vi_i(x, c) ((vint)__lsx_vsrli_w((__m128i)(x), (c)))
++//@#define vsrl_vi_vi_i(x, c) ((vint)__lsx_vsrli_w((__m128i)(x), (c)))
++#define vsra_vi_vi_i(x, c) ((vint)__lsx_vsrai_w((__m128i)(x), (c)))
++//@#define vsra_vi_vi_i(x, c) ((vint)__lsx_vsrai_w((__m128i)(x), (c)))
++
++static INLINE vint veq_vi_vi_vi(vint x, vint y) { return x == y; }
++static INLINE vint vgt_vi_vi_vi(vint x, vint y) { return (vint)__lsx_vslt_w((__m128i)y, (__m128i)x); }
++
++static INLINE vopmask veq_vo_vi_vi(vint x, vint y) {
++  return (vopmask)vreinterpretFirstHalf_vi2_vi((vint)__lsx_vseq_w((__m128i)x, (__m128i)y));
++}
++static INLINE vopmask vgt_vo_vi_vi(vint x, vint y) {
++  return (vopmask)vreinterpretFirstHalf_vi2_vi((vint)__lsx_vslt_w((__m128i)y, (__m128i)x));
++}
++
++static INLINE vint vsel_vi_vo_vi_vi(vopmask m, vint x, vint y) {
++  return (vint)__lsx_vbitsel_v((__m128i)y, (__m128i)x,
++                               (__m128i)vreinterpretFirstHalf_vi_vi2((vint2)m));
++}
++
++static INLINE vopmask visinf_vo_vd(vdouble d) { return veq_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(SLEEF_INFINITY)); }
++static INLINE vopmask vispinf_vo_vd(vdouble d) { return veq_vo_vd_vd(d, vcast_vd_d(SLEEF_INFINITY)); }
++static INLINE vopmask visminf_vo_vd(vdouble d) { return veq_vo_vd_vd(d, vcast_vd_d(-SLEEF_INFINITY)); }
++static INLINE vopmask visnan_vo_vd(vdouble d) { return (vopmask)__lsx_vfcmp_cune_d(d, d); }
++
++static INLINE vdouble vsqrt_vd_vd(vdouble d) {
++#if !defined(SLEEF_ENABLE_ALTSQRT)
++  return __lsx_vfsqrt_d(d);
++#else
++#if defined(__clang__)
++  typedef int64_t vi64 __attribute__((ext_vector_type(VECTLENDP)));
++#else
++  typedef int64_t vi64 __attribute__((vector_size(sizeof(int64_t)*VECTLENDP)));
++#endif
++
++  vdouble q = vcast_vd_d(1);
++
++  vopmask o = (vopmask)(d < 8.636168555094445E-78);
++  d = vsel_vd_vo_vd_vd(o, d * 1.157920892373162E77, d);
++
++  q = vsel_vd_vo_vd_vd(o, vcast_vd_d(2.9387358770557188E-39), vcast_vd_d(1));
++
++  q = (vdouble)vor_vm_vm_vm(vlt_vo_vd_vd(d, vcast_vd_d(0)), (vmask)q);
++
++  vdouble x = (vdouble)(0x5fe6ec85e7de30daLL - ((vi64)(d + 1e-320) >> 1));
++  x = x * (  3 - d * x * x);
++  x = x * ( 12 - d * x * x);
++  x = x * (768 - d * x * x);
++  x *= 1.0 / (1 << 13);
++  x = (d - (d * x) * (d * x)) * (x * 0.5) + d * x;
++
++  return x * q;
++#endif
++}
++
++static INLINE double vcast_d_vd(vdouble v) { return v[0]; }
++static INLINE float vcast_f_vf(vfloat v) { return v[0]; }
++
++static INLINE vdouble vload_vd_p(const double *ptr) { return (vdouble)__lsx_vld(ptr, 0); }
++static INLINE vdouble vloadu_vd_p(const double *ptr) {
++  return (vdouble)__lsx_vld(ptr, 0);
++}
++
++static INLINE vdouble vgather_vd_p_vi(const double *ptr, vint vi) {
++  vdouble vd;
++  for(int i=0;i<VECTLENDP;i++) vd[i] = ptr[vi[i]];
++  return vd;
++}
++
++static INLINE void vstore_v_p_vd(double *ptr, vdouble v) { __lsx_vst((__m128i)v, ptr, 0); }
++static INLINE void vstoreu_v_p_vd(double *ptr, vdouble v) {
++  __lsx_vst((__m128i)v, ptr, 0);
++}
++static INLINE void vstream_v_p_vd(double *ptr, vdouble v) { *(vdouble *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vd(double *ptr, int offset, int step, vdouble v) {
++  for(int i=0;i<VECTLENDP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vd(double *ptr, int offset, int step, vdouble v) { vscatter2_v_p_i_i_vd(ptr, offset, step, v); }
++
++//
++
++static INLINE vfloat vsel_vf_vo_vf_vf(vopmask o, vfloat x, vfloat y) {
++  return (vfloat)__lsx_vbitsel_v((__m128i)y, (__m128i)x, (__m128i)o);
++}
++
++static INLINE CONST vfloat vsel_vf_vo_f_f(vopmask o, float v1, float v0) {
++  return vsel_vf_vo_vf_vf(o, vcast_vf_f(v1), vcast_vf_f(v0));
++}
++
++static INLINE vfloat vsel_vf_vo_vo_f_f_f(vopmask o0, vopmask o1, float d0, float d1, float d2) {
++  return vsel_vf_vo_vf_vf(o0, vcast_vf_f(d0), vsel_vf_vo_f_f(o1, d1, d2));
++}
++
++static INLINE vfloat vsel_vf_vo_vo_vo_f_f_f_f(vopmask o0, vopmask o1, vopmask o2, float d0, float d1, float d2, float d3) {
++  return vsel_vf_vo_vf_vf(o0, vcast_vf_f(d0), vsel_vf_vo_vf_vf(o1, vcast_vf_f(d1), vsel_vf_vo_f_f(o2, d2, d3)));
++}
++
++static INLINE vint2 vcast_vi2_vm(vmask vm) { return (vint2)vm; }
++static INLINE vmask vcast_vm_vi2(vint2 vi) { return (vmask)vi; }
++
++static INLINE vfloat vcast_vf_vi2(vint2 vi) { return __lsx_vffint_s_w((__m128i)vi); }
++
++static INLINE vint2 vtruncate_vi2_vf(vfloat vf) { return (vint2)__lsx_vftintrz_w_s(vf); }
++
++static INLINE vint2 vrint_vi2_vf(vfloat vf) { return (vint2)__lsx_vftintrne_w_s(vf); }
++static INLINE vfloat vtruncate_vf_vf(vfloat vd) { return __lsx_vfrintrz_s(vd); }
++static INLINE vfloat vrint_vf_vf(vfloat vd) { return __lsx_vfrintrne_s(vd); }
++
++static INLINE vmask vreinterpret_vm_vf(vfloat vf) { return (vmask)vf; }
++static INLINE vfloat vreinterpret_vf_vm(vmask vm) { return (vfloat)vm; }
++static INLINE vfloat vreinterpret_vf_vi2(vint2 vi) { return (vfloat)vi; }
++static INLINE vint2 vreinterpret_vi2_vf(vfloat vf) { return (vint2)vf; }
++
++static INLINE vfloat vadd_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfadd_s(x, y); }
++static INLINE vfloat vsub_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfsub_s(x, y); }
++static INLINE vfloat vmul_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfmul_s(x, y); }
++static INLINE vfloat vdiv_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfdiv_s(x, y); }
++static INLINE vfloat vrec_vf_vf(vfloat x) { return __lsx_vfrecip_s(x); }
++
++static INLINE vfloat vabs_vf_vf(vfloat f) { return (vfloat)__lsx_vbitclri_w((__m128i)f, 31); }
++static INLINE vfloat vneg_vf_vf(vfloat d) { return (vfloat)__lsx_vbitrevi_w((__m128i)d, 31); }
++#if CONFIG == 1
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmadd_s(x, y, z); }
++// FNMSUB computes -(x*y-z), which has different signed-zero semantics
++// from the required fma(-x, y, z).
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmadd_s(vneg_vf_vf(x), y, z); }
++static INLINE vfloat vmlapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmsub_s(x, y, z); }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++static INLINE vfloat vmlapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++#endif
++static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmadd_s(x, y, z); }
++static INLINE vfloat vfmanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmadd_s(vneg_vf_vf(x), y, z); }
++static INLINE vfloat vfmapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return __lsx_vfmsub_s(x, y, z); }
++static INLINE vfloat vmax_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfmax_s(x, y); }
++static INLINE vfloat vmin_vf_vf_vf(vfloat x, vfloat y) { return __lsx_vfmin_s(x, y); }
++
++static INLINE vfloat vsubadd_vf_vf_vf(vfloat x, vfloat y) { return vadd_vf_vf_vf(x, vnegpos_vf_vf(y)); }
++static INLINE vfloat vmlsubadd_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsubadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++
++static INLINE vopmask veq_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_ceq_s(x, y); }
++static INLINE vopmask vneq_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_cune_s(x, y); }
++static INLINE vopmask vlt_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_clt_s(x, y); }
++static INLINE vopmask vle_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_cle_s(x, y); }
++static INLINE vopmask vgt_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_clt_s(y, x); }
++static INLINE vopmask vge_vo_vf_vf(vfloat x, vfloat y) { return (vopmask)__lsx_vfcmp_cle_s(y, x); }
++
++static INLINE vint2 vadd_vi2_vi2_vi2(vint2 x, vint2 y) { return x + y; }
++static INLINE vint2 vsub_vi2_vi2_vi2(vint2 x, vint2 y) { return x - y; }
++static INLINE vint2 vneg_vi2_vi2(vint2 e) { return -e; }
++
++static INLINE vint2 vand_vi2_vi2_vi2(vint2 x, vint2 y) { return x & y; }
++static INLINE vint2 vandnot_vi2_vi2_vi2(vint2 x, vint2 y) {
++  return (vint2)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++static INLINE vint2 vor_vi2_vi2_vi2(vint2 x, vint2 y) { return x | y; }
++static INLINE vint2 vxor_vi2_vi2_vi2(vint2 x, vint2 y) { return x ^ y; }
++
++static INLINE vint2 vand_vi2_vo_vi2(vopmask x, vint2 y) { return (vint2)x & y; }
++static INLINE vint2 vandnot_vi2_vo_vi2(vopmask x, vint2 y) {
++  return (vint2)__lsx_vandn_v((__m128i)x, (__m128i)y);
++}
++
++#define vsll_vi2_vi2_i(x, c) ((vint2)__lsx_vslli_w((__m128i)(x), (c)))
++//@#define vsll_vi2_vi2_i(x, c) ((vint2)__lsx_vslli_w((__m128i)(x), (c)))
++#define vsrl_vi2_vi2_i(x, c) ((vint2)__lsx_vsrli_w((__m128i)(x), (c)))
++//@#define vsrl_vi2_vi2_i(x, c) ((vint2)__lsx_vsrli_w((__m128i)(x), (c)))
++#define vsra_vi2_vi2_i(x, c) ((vint2)__lsx_vsrai_w((__m128i)(x), (c)))
++//@#define vsra_vi2_vi2_i(x, c) ((vint2)__lsx_vsrai_w((__m128i)(x), (c)))
++
++static INLINE vopmask veq_vo_vi2_vi2(vint2 x, vint2 y) { return (vopmask)(x == y); }
++static INLINE vopmask vgt_vo_vi2_vi2(vint2 x, vint2 y) { return (vopmask)__lsx_vslt_w((__m128i)y, (__m128i)x); }
++static INLINE vint2 veq_vi2_vi2_vi2(vint2 x, vint2 y) { return x == y; }
++static INLINE vint2 vgt_vi2_vi2_vi2(vint2 x, vint2 y) { return (vint2)__lsx_vslt_w((__m128i)y, (__m128i)x); }
++
++static INLINE vopmask visinf_vo_vf(vfloat d) { return veq_vo_vf_vf(vabs_vf_vf(d), vcast_vf_f(SLEEF_INFINITYf)); }
++static INLINE vopmask vispinf_vo_vf(vfloat d) { return veq_vo_vf_vf(d, vcast_vf_f(SLEEF_INFINITYf)); }
++static INLINE vopmask visminf_vo_vf(vfloat d) { return veq_vo_vf_vf(d, vcast_vf_f(-SLEEF_INFINITYf)); }
++static INLINE vopmask visnan_vo_vf(vfloat d) { return (vopmask)__lsx_vfcmp_cune_s(d, d); }
++
++static INLINE vfloat vsqrt_vf_vf(vfloat d) {
++#if !defined(SLEEF_ENABLE_ALTSQRT)
++  return __lsx_vfsqrt_s(d);
++#else
++  vfloat q = vcast_vf_f(1);
++
++  vopmask o = (vopmask)(d < 5.4210108624275221700372640043497e-20f); // 2^-64
++  d = vsel_vf_vo_vf_vf(o, d * vcast_vf_f(18446744073709551616.0f), d); // 2^64
++  q = vsel_vf_vo_vf_vf(o, vcast_vf_f(0.00000000023283064365386962890625f), vcast_vf_f(1)); // 2^-32
++  q = (vfloat)vor_vm_vm_vm(vlt_vo_vf_vf(d, vcast_vf_f(0)), (vmask)q);
++
++  vfloat x = (vfloat)(0x5f330de2 - (((vint2)d) >> 1));
++  x = x * ( 3.0f - d * x * x);
++  x = x * (12.0f - d * x * x);
++  x *= 0.0625f;
++  x = (d - (d * x) * (d * x)) * (x * 0.5) + d * x;
++
++  return x * q;
++#endif
++}
++
++static INLINE vfloat vload_vf_p(const float *ptr) { return (vfloat)__lsx_vld(ptr, 0); }
++static INLINE vfloat vloadu_vf_p(const float *ptr) {
++  return (vfloat)__lsx_vld(ptr, 0);
++}
++
++static INLINE vfloat vgather_vf_p_vi2(const float *ptr, vint2 vi2) {
++  vfloat vf;
++  for(int i=0;i<VECTLENSP;i++) vf[i] = ptr[vi2[i]];
++  return vf;
++}
++
++static INLINE void vstore_v_p_vf(float *ptr, vfloat v) { __lsx_vst((__m128i)v, ptr, 0); }
++static INLINE void vstoreu_v_p_vf(float *ptr, vfloat v) {
++  __lsx_vst((__m128i)v, ptr, 0);
++}
++static INLINE void vstream_v_p_vf(float *ptr, vfloat v) { *(vfloat *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vf(float *ptr, int offset, int step, vfloat v) {
++  for(int i=0;i<VECTLENSP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vf(float *ptr, int offset, int step, vfloat v) { vscatter2_v_p_i_i_vf(ptr, offset, step, v); }
++
++//
++
++#ifdef ENABLE_LONGDOUBLE
++static INLINE vlongdouble vadd_vl_vl_vl(vlongdouble x, vlongdouble y) { return x + y; }
++static INLINE vlongdouble vsub_vl_vl_vl(vlongdouble x, vlongdouble y) { return x - y; }
++static INLINE vlongdouble vmul_vl_vl_vl(vlongdouble x, vlongdouble y) { return x * y; }
++
++static INLINE vlongdouble vneg_vl_vl(vlongdouble d) { return -d; }
++static INLINE vlongdouble vsubadd_vl_vl_vl(vlongdouble x, vlongdouble y) { return vadd_vl_vl_vl(x, vnegpos_vl_vl(y)); }
++static INLINE vlongdouble vmlsubadd_vl_vl_vl_vl(vlongdouble x, vlongdouble y, vlongdouble z) { return vsubadd_vl_vl_vl(vmul_vl_vl_vl(x, y), z); }
++
++static INLINE vlongdouble vload_vl_p(const long double *ptr) { return *(vlongdouble *)ptr; }
++static INLINE vlongdouble vloadu_vl_p(const long double *ptr) {
++  vlongdouble vd;
++  for(int i=0;i<VECTLENDP;i++) vd[i] = ptr[i];
++  return vd;
++}
++
++static INLINE void vstore_v_p_vl(long double *ptr, vlongdouble v) { *(vlongdouble *)ptr = v; }
++static INLINE void vstoreu_v_p_vl(long double *ptr, vlongdouble v) {
++  for(int i=0;i<VECTLENDP;i++) ptr[i] = v[i];
++}
++static INLINE void vstream_v_p_vl(long double *ptr, vlongdouble v) { *(vlongdouble *)ptr = v; }
++
++static INLINE void vscatter2_v_p_i_i_vl(long double *ptr, int offset, int step, vlongdouble v) {
++  for(int i=0;i<VECTLENDP/2;i++) {
++    *(ptr+(offset + step * i)*2 + 0) = v[i*2+0];
++    *(ptr+(offset + step * i)*2 + 1) = v[i*2+1];
++  }
++}
++
++static INLINE void vsscatter2_v_p_i_i_vl(long double *ptr, int offset, int step, vlongdouble v) { vscatter2_v_p_i_i_vl(ptr, offset, step, v); }
++#endif
++
++#if defined(Sleef_quad2_DEFINED) && defined(ENABLEFLOAT128)
++/* vquad is an opaque pair of vector-sized bit containers. */
++static vquad loadu_vq_p(void *p) {
++  vquad vd;
++  memcpy(&vd, p, VECTLENDP * 16);
++  return vd;
++}
++
++static INLINE vquad cast_vq_aq(vargquad aq) {
++  vquad vq;
++  memcpy(&vq, &aq, VECTLENDP * 16);
++  return vq;
++}
++
++static INLINE vargquad cast_aq_vq(vquad vq) {
++  vargquad aq;
++  memcpy(&aq, &vq, VECTLENDP * 16);
++  return aq;
++}
++#endif
 diff --git a/src/arch/helperpurec_scalar.h b/src/arch/helperpurec_scalar.h
-index 2826ea0..c0827b4 100644
+index c6a8c0058..44a31d199 100644
 --- a/src/arch/helperpurec_scalar.h
 +++ b/src/arch/helperpurec_scalar.h
 @@ -54,7 +54,7 @@
@@ -34,43 +1865,655 @@ index 2826ea0..c0827b4 100644
  //@#define ENABLE_FMA_SP
  
 -#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__powerpc64__) || defined(__zarch__) || defined(__riscv) || CONFIG == 3
-+#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__powerpc64__) || defined(__zarch__) || defined(__riscv) || defined(__loongarch64) || CONFIG == 3
++#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__loongarch64) || defined(__powerpc64__) || defined(__zarch__) || defined(__riscv) || CONFIG == 3
  #ifndef FP_FAST_FMA
  //@#ifndef FP_FAST_FMA
  #define FP_FAST_FMA
+diff --git a/src/common/quaddef.h b/src/common/quaddef.h
+index f9762d24f..555027868 100644
+--- a/src/common/quaddef.h
++++ b/src/common/quaddef.h
+@@ -18,7 +18,11 @@
+ typedef struct { uint64_t x, y; } Sleef_uint64_2t;
+ #if defined(SLEEF_FLOAT128_IS_IEEEQP) || defined(ENABLEFLOAT128)
+ typedef __float128 Sleef_quad;
++#if defined(__loongarch__)
++#define SLEEF_QUAD_C(x) (x ## f128)
++#else
+ #define SLEEF_QUAD_C(x) (x ## Q)
++#endif
+ #elif defined(SLEEF_LONGDOUBLE_IS_IEEEQP)
+ typedef long double Sleef_quad;
+ #define SLEEF_QUAD_C(x) (x ## L)
+@@ -87,7 +91,11 @@ SLEEFSHARPdefine SLEEFXXXSleef_quad_DEFINED
+ typedef struct { uint64_t x, y; } Sleef_uint64_2t;
+ SLEEFSHARPif defined(SLEEFXXXSLEEF_FLOAT128_IS_IEEEQP)
+ typedef __float128 Sleef_quad;
++SLEEFSHARPif __loongarch__
++SLEEFSHARPdefine SLEEFXXXSLEEF_QUAD_C(x) (x ## f128)
++SLEEFSHARPelse
+ SLEEFSHARPdefine SLEEFXXXSLEEF_QUAD_C(x) (x ## Q)
++SLEEFSHARPendif
+ SLEEFSHARPelif defined(SLEEFXXXSLEEF_LONGDOUBLE_IS_IEEEQP)
+ typedef long double Sleef_quad;
+ SLEEFSHARPdefine SLEEFXXXSLEEF_QUAD_C(x) (x ## L)
 diff --git a/src/libm-tester/CMakeLists.txt b/src/libm-tester/CMakeLists.txt
-index 1b5a2a5..4ee07b2 100644
+index 320a2a9f5..a7ac8cbc5 100644
 --- a/src/libm-tester/CMakeLists.txt
 +++ b/src/libm-tester/CMakeLists.txt
-@@ -55,6 +55,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
- elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64")
-   set(TEST3_CINZ purec_scalar rvvm1nofma rvvm2nofma)
-   set(TEST3_FINZ purecfma_scalar rvvm1 rvvm2)
+@@ -32,6 +32,9 @@ set(TESTER3_DEFINITIONS_RVVM1NOFMA ATR=cinz_ DPTYPE=vfloat64m1_t SPTYPE=vfloat32
+ set(TESTER3_DEFINITIONS_RVVM2      ATR=finz_ DPTYPE=vfloat64m2_t SPTYPE=vfloat32m2_t DPTYPESPEC=dx SPTYPESPEC=fx EXTSPEC=rvvm2 ENABLE_RVVM2)
+ set(TESTER3_DEFINITIONS_RVVM2NOFMA ATR=cinz_ DPTYPE=vfloat64m2_t SPTYPE=vfloat32m2_t DPTYPESPEC=dx SPTYPESPEC=fx EXTSPEC=rvvm2nofma ENABLE_RVVM2)
+ 
++set(TESTER3_DEFINITIONS_LSX       ATR=finz_ DPTYPE=__m128d SPTYPE=__m128 DPTYPESPEC=d2 SPTYPESPEC=f4 EXTSPEC=lsx)
++set(TESTER3_DEFINITIONS_LASX      ATR=finz_ DPTYPE=__m256d SPTYPE=__m256 DPTYPESPEC=d4 SPTYPESPEC=f8 EXTSPEC=lasx)
++
+ set(TESTER3_DEFINITIONS_PUREC_SCALAR    ATR=cinz_ DPTYPE=double SPTYPE=float DPTYPESPEC=d1 SPTYPESPEC=f1 EXTSPEC=purec)
+ set(TESTER3_DEFINITIONS_PURECFMA_SCALAR ATR=finz_ DPTYPE=double SPTYPE=float DPTYPESPEC=d1 SPTYPESPEC=f1 EXTSPEC=purecfma)
+ 
+@@ -46,6 +49,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+   set(TEST3_CINZ purec_scalar)
+   set(TEST3_FINZ purecfma_scalar)
 +elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "loongarch64")
 +  set(TEST3_CINZ purec_scalar)
-+  set(TEST3_FINZ purecfma_scalar)
- endif()
++  set(TEST3_FINZ purecfma_scalar lsx lasx)
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
+   set(TEST3_CINZ purec_scalar vsxnofma vsx3nofma)
+   set(TEST3_FINZ purecfma_scalar vsx vsx3)
+@@ -318,6 +324,47 @@ foreach(SIMD ${SLEEF_SUPPORTED_LIBM_EXTENSIONS})
+   test_extension(${SIMD})
+ endforeach()
  
- #
++# The regular libm testers exercise the final numerical result, but do not
++# reliably expose a lane permutation error. Keep these helper-level checks
++# separate and run them only on LoongArch targets that support the ISA.
++if (SLEEF_ARCH_LOONGARCH64 AND COMPILER_SUPPORTS_LSX)
++  add_executable(helper_lane_layout_lsx testerloonglane.c
++    ${sleef_SOURCE_DIR}/src/common/main_checkfeature.c)
++  target_compile_options(helper_lane_layout_lsx PRIVATE ${FLAGS_ENABLE_LSX})
++  target_compile_definitions(helper_lane_layout_lsx PRIVATE TEST_LSX=1)
++  target_include_directories(helper_lane_layout_lsx PRIVATE
++    ${sleef_SOURCE_DIR}/src/arch
++    ${sleef_SOURCE_DIR}/src/common
++    ${sleef_BINARY_DIR}/include)
++  set_target_properties(helper_lane_layout_lsx PROPERTIES ${COMMON_TARGET_PROPERTIES})
++  add_dependencies(helper_lane_layout_lsx ${TARGET_HEADERS})
++  if (EMULATOR)
++    add_test(NAME helper_lane_layout_lsx COMMAND ${EMULATOR} helper_lane_layout_lsx)
++  else()
++    add_test(NAME helper_lane_layout_lsx COMMAND helper_lane_layout_lsx)
++  endif()
++  set_tests_properties(helper_lane_layout_lsx PROPERTIES COST 0.1)
++endif()
++
++if (SLEEF_ARCH_LOONGARCH64 AND COMPILER_SUPPORTS_LASX)
++  add_executable(helper_lane_layout_lasx testerloonglane.c
++    ${sleef_SOURCE_DIR}/src/common/main_checkfeature.c)
++  target_compile_options(helper_lane_layout_lasx PRIVATE ${FLAGS_ENABLE_LASX})
++  target_compile_definitions(helper_lane_layout_lasx PRIVATE TEST_LASX=1)
++  target_include_directories(helper_lane_layout_lasx PRIVATE
++    ${sleef_SOURCE_DIR}/src/arch
++    ${sleef_SOURCE_DIR}/src/common
++    ${sleef_BINARY_DIR}/include)
++  set_target_properties(helper_lane_layout_lasx PROPERTIES ${COMMON_TARGET_PROPERTIES})
++  add_dependencies(helper_lane_layout_lasx ${TARGET_HEADERS})
++  if (EMULATOR)
++    add_test(NAME helper_lane_layout_lasx COMMAND ${EMULATOR} helper_lane_layout_lasx)
++  else()
++    add_test(NAME helper_lane_layout_lasx COMMAND helper_lane_layout_lasx)
++  endif()
++  set_tests_properties(helper_lane_layout_lasx PROPERTIES COST 0.1)
++endif()
++
+ function(add_gnuabi_compatibility_test SIMD MASKED)
+   if (MASKED)
+     set(GNUABI_COMPATIBILITY_TEST gnuabi_compatibility_${SIMD}_masked)
+diff --git a/src/libm-tester/iutsimd.c b/src/libm-tester/iutsimd.c
+index a5cd62584..54cf66925 100644
+--- a/src/libm-tester/iutsimd.c
++++ b/src/libm-tester/iutsimd.c
+@@ -61,6 +61,14 @@
+ #include <riscv_vector.h>
+ #endif
+ 
++#if defined(__loongarch_sx)
++#include <lsxintrin.h>
++#endif
++
++#if defined(__loongarch_asx)
++#include <lasxintrin.h>
++#endif
++
+ #if defined(__VSX__)
+ #include <altivec.h>
+ #endif
+@@ -171,6 +179,56 @@ typedef Sleef___m512_2 vfloat2;
+ #include "norename.h"
+ #endif
+ 
++// LoongArch
++
++#ifdef ENABLE_LSX
++#if !defined(USE_INLINE_HEADER)
++#define CONFIG 1
++#include "helperlsx.h"
++#endif
++#include "renamelsx.h"
++#if !defined(USE_INLINE_HEADER)
++typedef Sleef___m128d_2 vdouble2;
++typedef Sleef___m128_2 vfloat2;
++#undef xldexp
++#define xldexp(x, q) Sleef_ldexpd2_lsx((__m128d)(x), (__m128i)(q))
++#undef xilogb
++#define xilogb(x) ((vint)Sleef_ilogbd2_lsx((__m128d)(x)))
++#undef xexpfrexp
++#define xexpfrexp(x) ((vint)Sleef_expfrexpd2_lsx((__m128d)(x)))
++#undef xldexpf
++#define xldexpf(x, q) Sleef_ldexpf4_lsx((__m128)(x), (__m128)(q))
++#undef xilogbf
++#define xilogbf(x) ((vint2)Sleef_ilogbf4_lsx((__m128)(x)))
++#undef xexpfrexpf
++#define xexpfrexpf(x) ((vint2)Sleef_expfrexpf4_lsx((__m128)(x)))
++#endif
++#endif
++
++#ifdef ENABLE_LASX
++#if !defined(USE_INLINE_HEADER)
++#define CONFIG 1
++#include "helperlasx.h"
++#endif
++#include "renamelasx.h"
++#if !defined(USE_INLINE_HEADER)
++typedef Sleef___m256d_2 vdouble2;
++typedef Sleef___m256_2 vfloat2;
++#undef xldexp
++#define xldexp(x, q) Sleef_ldexpd4_lasx((__m256d)(x), (__m128i)(q))
++#undef xilogb
++#define xilogb(x) ((vint)Sleef_ilogbd4_lasx((__m256d)(x)))
++#undef xexpfrexp
++#define xexpfrexp(x) ((vint)Sleef_expfrexpd4_lasx((__m256d)(x)))
++#undef xldexpf
++#define xldexpf(x, q) Sleef_ldexpf8_lasx((__m256)(x), (__m256)(q))
++#undef xilogbf
++#define xilogbf(x) ((vint2)Sleef_ilogbf8_lasx((__m256)(x)))
++#undef xexpfrexpf
++#define xexpfrexpf(x) ((vint2)Sleef_expfrexpf8_lasx((__m256)(x)))
++#endif
++#endif
++
+ #ifdef ENABLE_PUREC
+ #define CONFIG 1
+ #include "helperpurec.h"
+diff --git a/src/libm-tester/tester2simddp.c b/src/libm-tester/tester2simddp.c
+index f236c3b9c..78378e62a 100644
+--- a/src/libm-tester/tester2simddp.c
++++ b/src/libm-tester/tester2simddp.c
+@@ -99,6 +99,24 @@ typedef Sleef___m512_2 vfloat2;
+ #include "norename.h"
+ #endif
+ 
++// LoongArch
++
++#ifdef ENABLE_LSX
++#define CONFIG 1
++#include "helperlsx.h"
++#include "renamelsx.h"
++typedef Sleef___m128d_2 vdouble2;
++typedef Sleef___m128_2 vfloat2;
++#endif
++
++#ifdef ENABLE_LASX
++#define CONFIG 1
++#include "helperlasx.h"
++#include "renamelasx.h"
++typedef Sleef___m256d_2 vdouble2;
++typedef Sleef___m256_2 vfloat2;
++#endif
++
+ #ifdef ENABLE_ADVSIMD
+ #define CONFIG 1
+ #include "helperadvsimd.h"
+diff --git a/src/libm-tester/tester2simdsp.c b/src/libm-tester/tester2simdsp.c
+index b6574337d..2bce02f0b 100644
+--- a/src/libm-tester/tester2simdsp.c
++++ b/src/libm-tester/tester2simdsp.c
+@@ -99,6 +99,24 @@ typedef Sleef___m512_2 vfloat2;
+ #include "norename.h"
+ #endif
+ 
++// LoongArch
++
++#ifdef ENABLE_LSX
++#define CONFIG 1
++#include "helperlsx.h"
++#include "renamelsx.h"
++typedef Sleef___m128d_2 vdouble2;
++typedef Sleef___m128_2 vfloat2;
++#endif
++
++#ifdef ENABLE_LASX
++#define CONFIG 1
++#include "helperlasx.h"
++#include "renamelasx.h"
++typedef Sleef___m256d_2 vdouble2;
++typedef Sleef___m256_2 vfloat2;
++#endif
++
+ #ifdef ENABLE_ADVSIMD
+ #define CONFIG 1
+ #include "helperadvsimd.h"
+diff --git a/src/libm-tester/tester3.c b/src/libm-tester/tester3.c
+index 865dd2286..20e6e44f1 100644
+--- a/src/libm-tester/tester3.c
++++ b/src/libm-tester/tester3.c
+@@ -68,6 +68,22 @@ static INLINE float get__m512(__m512 v, int r) { static float a[16]; _mm512_stor
+ #endif
+ #endif // #if defined(__i386__) || defined(__x86_64__) || defined(_MSC_VER)
+ 
++#if defined(__loongarch_sx)
++#include <lsxintrin.h>
++static INLINE __m128d set__m128d(double d, int r) { double a[2]; memrand(a, sizeof(a)); a[r & 1] = d; __m128d v; memcpy(&v, a, sizeof(v)); return v; }
++static INLINE double get__m128d(__m128d v, int r) { double a[2]; memcpy(a, &v, sizeof(a)); return unifyValue(a[r & 1]); }
++static INLINE __m128 set__m128(float d, int r) { float a[4]; memrand(a, sizeof(a)); a[r & 3] = d; __m128 v; memcpy(&v, a, sizeof(v)); return v; }
++static INLINE float get__m128(__m128 v, int r) { float a[4]; memcpy(a, &v, sizeof(a)); return unifyValuef(a[r & 3]); }
++#endif
++
++#if defined(__loongarch_asx)
++#include <lasxintrin.h>
++static INLINE __m256d set__m256d(double d, int r) { double a[4]; memrand(a, sizeof(a)); a[r & 3] = d; __m256d v; memcpy(&v, a, sizeof(v)); return v; }
++static INLINE double get__m256d(__m256d v, int r) { double a[4]; memcpy(a, &v, sizeof(a)); return unifyValue(a[r & 3]); }
++static INLINE __m256 set__m256(float d, int r) { float a[8]; memrand(a, sizeof(a)); a[r & 7] = d; __m256 v; memcpy(&v, a, sizeof(v)); return v; }
++static INLINE float get__m256(__m256 v, int r) { float a[8]; memcpy(a, &v, sizeof(a)); return unifyValuef(a[r & 7]); }
++#endif
++
+ #if defined(__aarch64__) && defined(__ARM_NEON)
+ static INLINE VECTOR_CC float64x2_t setfloat64x2_t(double d, int r) { double a[2]; memrand(a, sizeof(a)); a[r & 1] = d; return vld1q_f64(a); }
+ static INLINE VECTOR_CC double getfloat64x2_t(float64x2_t v, int r) { double a[2]; vst1q_f64(a, v); return unifyValue(a[r & 1]); }
+diff --git a/src/libm-tester/testerloonglane.c b/src/libm-tester/testerloonglane.c
+new file mode 100644
+index 000000000..7e46c404e
+--- /dev/null
++++ b/src/libm-tester/testerloonglane.c
+@@ -0,0 +1,338 @@
++// Helper-level lane-layout tests for the LoongArch LSX/LASX backends.
++
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#define CONFIG 1
++
++#if defined(TEST_LSX)
++#include "helperlsx.h"
++#elif defined(TEST_LASX)
++#include "helperlasx.h"
++#else
++#error Select TEST_LSX or TEST_LASX
++#endif
++
++static int check_int32(const char *name, const int32_t *actual,
++                       const int32_t *expected, int count) {
++  for (int i = 0; i < count; i++) {
++    if (actual[i] != expected[i]) {
++      fprintf(stderr, "%s: lane %d: got 0x%08x, expected 0x%08x\n",
++              name, i, (uint32_t)actual[i], (uint32_t)expected[i]);
++      return 1;
++    }
++  }
++  return 0;
++}
++
++static int check_double(const char *name, const double *actual,
++                        const double *expected, int count) {
++  for (int i = 0; i < count; i++) {
++    if (actual[i] != expected[i]) {
++      fprintf(stderr, "%s: lane %d: got %.17g, expected %.17g\n",
++              name, i, actual[i], expected[i]);
++      return 1;
++    }
++  }
++  return 0;
++}
++
++static int test_mask_conversion_layout(void) {
++#if defined(TEST_LSX)
++  /* vo64/vo32 are stored in the raw vopmask word layout. */
++  const uint32_t vo32_source_words[VECTLENSP] = { UINT32_MAX, 0, 0, 0 };
++  const uint32_t vo64_source_words[VECTLENSP] = { UINT32_MAX, UINT32_MAX, 0, 0 };
++  const uint32_t vo64_expected_words[VECTLENSP] = { UINT32_MAX, UINT32_MAX, 0, 0 };
++  const uint32_t vo32_expected_words[VECTLENDP] = { UINT32_MAX, 0 };
++#else
++  const uint32_t vo32_source_words[VECTLENSP] = {
++    UINT32_MAX, 0, UINT32_MAX, 0, 0, 0, 0, 0
++  };
++  const uint32_t vo64_source_words[VECTLENSP] = {
++    UINT32_MAX, UINT32_MAX, 0, 0, UINT32_MAX, UINT32_MAX, 0, 0
++  };
++  const uint32_t vo64_expected_words[VECTLENSP] = {
++    UINT32_MAX, UINT32_MAX, 0, 0, UINT32_MAX, UINT32_MAX, 0, 0
++  };
++  const uint32_t vo32_expected_words[VECTLENDP] = { UINT32_MAX, 0, UINT32_MAX, 0 };
++#endif
++  uint32_t actual32[VECTLENSP];
++  vopmask mask;
++
++  memcpy(&mask, vo32_source_words, sizeof(mask));
++  mask = vcast_vo64_vo32(mask);
++  memcpy(actual32, &mask, sizeof(actual32));
++  if (check_int32("vcast_vo64_vo32", (const int32_t *)actual32,
++                  (const int32_t *)vo64_expected_words, VECTLENSP)) return 1;
++
++  memcpy(&mask, vo64_source_words, sizeof(mask));
++  mask = vcast_vo32_vo64(mask);
++  memcpy(actual32, &mask, sizeof(actual32));
++  return check_int32("vcast_vo32_vo64", (const int32_t *)actual32,
++                     (const int32_t *)vo32_expected_words, VECTLENDP);
++}
++
++static int check_float(const char *name, const float *actual,
++                       const float *expected, int count) {
++  for (int i = 0; i < count; i++) {
++    if (actual[i] != expected[i]) {
++      fprintf(stderr, "%s: lane %d: got %.9g, expected %.9g\n",
++              name, i, actual[i], expected[i]);
++      return 1;
++    }
++  }
++  return 0;
++}
++
++static int test_mask_select_layout(void) {
++  uint64_t mask_bits[VECTLENDP];
++#if defined(TEST_LSX)
++  const double x_values[VECTLENDP] = { 10.0, 20.0 };
++  const double y_values[VECTLENDP] = { 1.0, 2.0 };
++  const double expected[VECTLENDP] = { 1.0, 20.0 };
++#else
++  const double x_values[VECTLENDP] = {
++    10.0, 20.0, 30.0, 40.0
++  };
++  const double y_values[VECTLENDP] = {
++    1.0, 2.0, 3.0, 4.0
++  };
++  const double expected[VECTLENDP] = {
++    1.0, 20.0, 30.0, 4.0
++  };
++#endif
++  double actual[VECTLENDP];
++  vopmask mask;
++  vdouble x, y, result;
++
++  for (int i = 0; i < VECTLENDP; i++) mask_bits[i] = (i == 1 || i == 2) ? UINT64_MAX : 0;
++  memcpy(&mask, mask_bits, sizeof(mask));
++  memcpy(&x, x_values, sizeof(x));
++  memcpy(&y, y_values, sizeof(y));
++  result = vsel_vd_vo_vd_vd(mask, x, y);
++  memcpy(actual, &result, sizeof(actual));
++  return check_double("vsel_vd_vo_vd_vd", actual, expected, VECTLENDP);
++}
++
++static int test_integer_layout(void) {
++#if defined(TEST_LSX)
++  int32_t input[VECTLENDP] = { 0x11, 0x22 };
++  int32_t expected[VECTLENSP] = { 0, 0x11, 0, 0x22 };
++#else
++  int32_t input[VECTLENDP] = { 0x11, 0x22, 0x33, 0x44 };
++  int32_t expected[VECTLENSP] = { 0, 0x11, 0, 0x22, 0, 0x33, 0, 0x44 };
++#endif
++  int32_t actual[VECTLENSP];
++  vint vi = { 0 };
++  memcpy(&vi, input, sizeof(input));
++
++  vint2 vi2 = vcastu_vi2_vi(vi);
++  memcpy(actual, &vi2, sizeof(actual));
++  if (check_int32("vcastu_vi2_vi", actual, expected, VECTLENSP)) return 1;
++
++  vint roundtrip = vcastu_vi_vi2(vi2);
++  memcpy(actual, &roundtrip, sizeof(input));
++  if (check_int32("vcastu_vi_vi2", actual, input, VECTLENDP)) return 1;
++
++  vint2 first_half = vreinterpretFirstHalf_vi2_vi(vi);
++  memset(expected, 0, sizeof(expected));
++  memcpy(expected, input, sizeof(input));
++  memcpy(actual, &first_half, sizeof(actual));
++  if (check_int32("vreinterpretFirstHalf_vi2_vi", actual, expected, VECTLENSP)) return 1;
++
++  vint first = vreinterpretFirstHalf_vi_vi2(first_half);
++  memcpy(actual, &first, sizeof(input));
++  return check_int32("vreinterpretFirstHalf_vi_vi2", actual, input, VECTLENDP);
++}
++
++static int test_numeric_layout(void) {
++#if defined(TEST_LSX)
++  const double doubles[VECTLENDP] = { 1.0, 2.0 };
++  const double expected_rev21_doubles[VECTLENDP] = { 2.0, 1.0 };
++  const double expected_reva2_doubles[VECTLENDP] = { 1.0, 2.0 };
++  const float floats[VECTLENSP] = { 1.0f, 2.0f, 3.0f, 4.0f };
++  const float expected_rev21_floats[VECTLENSP] = { 2.0f, 1.0f, 4.0f, 3.0f };
++  const float expected_reva2_floats[VECTLENSP] = { 3.0f, 4.0f, 1.0f, 2.0f };
++#else
++  const double doubles[VECTLENDP] = { 1.0, 2.0, 3.0, 4.0 };
++  const double expected_rev21_doubles[VECTLENDP] = { 2.0, 1.0, 4.0, 3.0 };
++  const double expected_reva2_doubles[VECTLENDP] = { 3.0, 4.0, 1.0, 2.0 };
++  const float floats[VECTLENSP] = { 1.0f, 2.0f, 3.0f, 4.0f,
++                                    5.0f, 6.0f, 7.0f, 8.0f };
++  const float expected_rev21_floats[VECTLENSP] = { 2.0f, 1.0f, 4.0f, 3.0f,
++                                                   6.0f, 5.0f, 8.0f, 7.0f };
++  const float expected_reva2_floats[VECTLENSP] = { 7.0f, 8.0f, 5.0f, 6.0f,
++                                                   3.0f, 4.0f, 1.0f, 2.0f };
++#endif
++  double actual_doubles[VECTLENDP];
++  float actual_floats[VECTLENSP];
++  vdouble vd;
++  vfloat vf;
++  vdouble result_doubles;
++  vfloat result_floats;
++
++  memcpy(&vd, doubles, sizeof(doubles));
++  result_doubles = vrev21_vd_vd(vd);
++  memcpy(actual_doubles, &result_doubles, sizeof(actual_doubles));
++  if (check_double("vrev21_vd_vd", actual_doubles, expected_rev21_doubles, VECTLENDP)) return 1;
++
++  result_doubles = vreva2_vd_vd(vd);
++  memcpy(actual_doubles, &result_doubles, sizeof(actual_doubles));
++  if (check_double("vreva2_vd_vd", actual_doubles, expected_reva2_doubles, VECTLENDP)) return 1;
++
++  memcpy(&vf, floats, sizeof(floats));
++  result_floats = vrev21_vf_vf(vf);
++  memcpy(actual_floats, &result_floats, sizeof(actual_floats));
++  if (check_float("vrev21_vf_vf", actual_floats, expected_rev21_floats, VECTLENSP)) return 1;
++
++  result_floats = vreva2_vf_vf(vf);
++  memcpy(actual_floats, &result_floats, sizeof(actual_floats));
++  return check_float("vreva2_vf_vf", actual_floats, expected_reva2_floats, VECTLENSP);
++}
++
++static int test_rounding_layout(void) {
++#if defined(TEST_LSX)
++  const double input[VECTLENDP] = { 1.75, -2.5 };
++  const int32_t expected[VECTLENDP] = { 1, -2 };
++  const int32_t expected_round[VECTLENDP] = { 2, -2 };
++#else
++  const double input[VECTLENDP] = { 1.75, -2.5, 3.75, -4.5 };
++  const int32_t expected[VECTLENDP] = { 1, -2, 3, -4 };
++  const int32_t expected_round[VECTLENDP] = { 2, -2, 4, -4 };
++#endif
++  int32_t actual[VECTLENSP];
++  vdouble vd;
++  memcpy(&vd, input, sizeof(input));
++  vint vi = vtruncate_vi_vd(vd);
++  memcpy(actual, &vi, sizeof(int32_t) * VECTLENDP);
++  if (check_int32("vtruncate_vi_vd", actual, expected, VECTLENDP)) return 1;
++
++  vi = vrint_vi_vd(vd);
++  memcpy(actual, &vi, sizeof(int32_t) * VECTLENDP);
++  return check_int32("vrint_vi_vd", actual, expected_round, VECTLENDP);
++}
++
++static int test_lasx_vint_layout(void) {
++#if !defined(TEST_LASX)
++  return 0;
++#else
++  const int32_t input[VECTLENDP] = {
++    INT32_MIN, 0x12345678, -1, INT32_MAX
++  };
++  const double expected_double[VECTLENDP] = {
++    (double)INT32_MIN, 0x12345678, -1.0, (double)INT32_MAX
++  };
++  int32_t actual[VECTLENDP];
++  double actual_double[VECTLENDP];
++  vint vi;
++  memcpy(&vi, input, sizeof(input));
++
++  vdouble vd = vcast_vd_vi(vi);
++  memcpy(actual_double, &vd, sizeof(actual_double));
++  if (check_double("vcast_vd_vi", actual_double, expected_double, VECTLENDP)) return 1;
++
++  vmask signed_mask = vcast_vm_vi(vi);
++  vint signed_roundtrip = vcast_vi_vm(signed_mask);
++  memcpy(actual, &signed_roundtrip, sizeof(actual));
++  if (check_int32("vcast_vm_vi/vcast_vi_vm", actual, input, VECTLENDP)) return 1;
++
++  vmask unsigned_mask = vcastu_vm_vi(vi);
++  vint unsigned_roundtrip = vcastu_vi_vm(unsigned_mask);
++  memcpy(actual, &unsigned_roundtrip, sizeof(actual));
++  if (check_int32("vcastu_vm_vi/vcastu_vi_vm", actual, input, VECTLENDP)) return 1;
++
++  const int32_t x_values[VECTLENDP] = { 11, 22, 33, 44 };
++  const int32_t y_values[VECTLENDP] = { -1, -2, -3, -4 };
++  const int32_t expected_select[VECTLENDP] = { -1, 22, 33, -4 };
++  const uint32_t mask_words[VECTLENSP] = {
++    0, UINT32_MAX, UINT32_MAX, 0, 0, 0, 0, 0
++  };
++  vopmask mask;
++  vint x, y;
++  memcpy(&mask, mask_words, sizeof(mask));
++  memcpy(&x, x_values, sizeof(x));
++  memcpy(&y, y_values, sizeof(y));
++  vint selected = vsel_vi_vo_vi_vi(mask, x, y);
++  memcpy(actual, &selected, sizeof(actual));
++  return check_int32("vsel_vi_vo_vi_vi", actual, expected_select, VECTLENDP);
++#endif
++}
++
++static int test_fma_signed_zero(void) {
++  uint64_t actual_dp[VECTLENDP];
++  uint32_t actual_sp[VECTLENSP];
++  vdouble x_dp = vcast_vd_d(1.0);
++  vdouble y_dp = vcast_vd_d(1.0);
++  vdouble z_dp = vcast_vd_d(1.0);
++  vfloat x_sp = vcast_vf_f(1.0f);
++  vfloat y_sp = vcast_vf_f(1.0f);
++  vfloat z_sp = vcast_vf_f(1.0f);
++
++  vdouble result_dp = vfmanp_vd_vd_vd_vd(x_dp, y_dp, z_dp);
++  memcpy(actual_dp, &result_dp, sizeof(actual_dp));
++  for (int i = 0; i < VECTLENDP; i++) {
++    if (actual_dp[i] != UINT64_C(0)) {
++      fprintf(stderr, "vfmanp double: lane %d: got 0x%016llx, expected +0\n",
++              i, (unsigned long long)actual_dp[i]);
++      return 1;
++    }
++  }
++
++  result_dp = vmlanp_vd_vd_vd_vd(x_dp, y_dp, z_dp);
++  memcpy(actual_dp, &result_dp, sizeof(actual_dp));
++  for (int i = 0; i < VECTLENDP; i++) {
++    if (actual_dp[i] != UINT64_C(0)) {
++      fprintf(stderr, "vmlanp double: lane %d: got 0x%016llx, expected +0\n",
++              i, (unsigned long long)actual_dp[i]);
++      return 1;
++    }
++  }
++
++  vfloat result_sp = vfmanp_vf_vf_vf_vf(x_sp, y_sp, z_sp);
++  memcpy(actual_sp, &result_sp, sizeof(actual_sp));
++  for (int i = 0; i < VECTLENSP; i++) {
++    if (actual_sp[i] != UINT32_C(0)) {
++      fprintf(stderr, "vfmanp float: lane %d: got 0x%08x, expected +0\n",
++              i, actual_sp[i]);
++      return 1;
++    }
++  }
++
++  result_sp = vmlanp_vf_vf_vf_vf(x_sp, y_sp, z_sp);
++  memcpy(actual_sp, &result_sp, sizeof(actual_sp));
++  for (int i = 0; i < VECTLENSP; i++) {
++    if (actual_sp[i] != UINT32_C(0)) {
++      fprintf(stderr, "vmlanp float: lane %d: got 0x%08x, expected +0\n",
++              i, actual_sp[i]);
++      return 1;
++    }
++  }
++  return 0;
++}
++
++int check_feature(double d, float f) {
++  (void)f;
++  vdouble value = vcast_vd_d(d);
++#if defined(TEST_LSX)
++  value = __lsx_vfadd_d(value, value);
++#else
++  value = __lasx_xvfadd_d(value, value);
++#endif
++  volatile double result[VECTLENDP];
++  memcpy((void *)result, &value, sizeof(result));
++  return result[0] == d + d;
++}
++
++int main2(int argc, char **argv) {
++  (void)argc;
++  (void)argv;
++  if (test_mask_conversion_layout()) return 1;
++  if (test_mask_select_layout()) return 1;
++  if (test_integer_layout()) return 1;
++  if (test_numeric_layout()) return 1;
++  if (test_rounding_layout()) return 1;
++  if (test_lasx_vint_layout()) return 1;
++  if (test_fma_signed_zero()) return 1;
++  return 0;
++}
 diff --git a/src/libm/CMakeLists.txt b/src/libm/CMakeLists.txt
-index 5cab91a..541267c 100644
+index 2329e3324..d2acd4967 100644
 --- a/src/libm/CMakeLists.txt
 +++ b/src/libm/CMakeLists.txt
-@@ -69,6 +69,12 @@ elseif(SLEEF_ARCH_RISCV64)
-     PUREC_SCALAR
+@@ -38,6 +38,14 @@ elseif(SLEEF_ARCH_AARCH32)
      PURECFMA_SCALAR
-     )
+     DSP_SCALAR
+   )
 +elseif(SLEEF_ARCH_LOONGARCH64)
 +  set(SLEEF_HEADER_LIST
++    LSX
++    LASX
 +    PUREC_SCALAR
 +    PURECFMA_SCALAR
 +    DSP_SCALAR
-+    )
- endif()
++  )
+ elseif(SLEEF_ARCH_PPC64)
+   set(SLEEF_HEADER_LIST
+     VSX_
+@@ -112,6 +120,9 @@ command_arguments(HEADER_PARAMS_RVVM1NOFMA      cinz_ x x vfloat64m1_t vfloat32m
+ command_arguments(HEADER_PARAMS_RVVM2           finz_ x x vfloat64m2_t vfloat32m2_t vint32m1_t vint32m2_t __riscv_v rvvm2)
+ command_arguments(HEADER_PARAMS_RVVM2NOFMA      cinz_ x x vfloat64m2_t vfloat32m2_t vint32m1_t vint32m2_t __riscv_v rvvm2nofma)
  
- # HEADER_PARAMS
++command_arguments(HEADER_PARAMS_LSX             finz_ 2 4 __m128d __m128 __m128i __m128i __loongarch_sx lsx)
++command_arguments(HEADER_PARAMS_LASX            finz_ 4 8 __m256d __m256 __m128i __m256i __loongarch_asx lasx)
++
+ command_arguments(HEADER_PARAMS_DSP_SCALAR      -     1 1 double float int32_t int32_t __STDC__)
+ command_arguments(HEADER_PARAMS_PUREC_SCALAR    cinz_ 1 1 double float int32_t int32_t __STDC__ purec)
+ command_arguments(HEADER_PARAMS_PURECFMA_SCALAR finz_ 1 1 double float int32_t int32_t __STDC__ purecfma)
+@@ -162,6 +173,8 @@ command_arguments(RENAME_PARAMS_RVVM1           finz_ x x rvvm1)
+ command_arguments(RENAME_PARAMS_RVVM1NOFMA      cinz_ x x rvvm1nofma)
+ command_arguments(RENAME_PARAMS_RVVM2           finz_ x x rvvm2)
+ command_arguments(RENAME_PARAMS_RVVM2NOFMA      cinz_ x x rvvm2nofma)
++command_arguments(RENAME_PARAMS_LSX             finz_ 2 4 lsx)
++command_arguments(RENAME_PARAMS_LASX            finz_ 4 8 lasx)
+ 
+ # ALIAS_PARAMS
+ 
 diff --git a/src/libm/sleeflibm_header.h.org.in b/src/libm/sleeflibm_header.h.org.in
-index 075e520..9d15bbd 100644
+index 66d88db3c..647f61e98 100644
 --- a/src/libm/sleeflibm_header.h.org.in
 +++ b/src/libm/sleeflibm_header.h.org.in
 @@ -21,7 +21,7 @@
@@ -78,15 +2521,288 @@ index 075e520..9d15bbd 100644
  #endif
  
 -#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__powerpc64__) || defined(__zarch__)
-+#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__powerpc64__) || defined(__zarch__) || defined(__loongarch64)
++#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__loongarch64) || defined(__powerpc64__) || defined(__zarch__)
  #ifndef FP_FAST_FMA
  #define FP_FAST_FMA
  #endif
+@@ -63,6 +63,14 @@
+ #include <arm_sve.h>
+ #endif
+ 
++#if defined(__loongarch_sx)
++#include <lsxintrin.h>
++#endif
++
++#if defined(__loongarch_asx)
++#include <lasxintrin.h>
++#endif
++
+ #if defined(__VSX__) && defined(__PPC64__) && defined(__LITTLE_ENDIAN__)
+ #include <altivec.h>
+ typedef __vector double       SLEEF_VECTOR_DOUBLE;
+@@ -177,7 +185,11 @@ typedef struct {
+ typedef struct { uint64_t x, y; } Sleef_uint64_2t;
+ #if defined(SLEEF_FLOAT128_IS_IEEEQP) || defined(ENABLEFLOAT128)
+ typedef __float128 Sleef_quad;
++#if defined(__loongarch__)
++#define SLEEF_QUAD_C(x) (x ## f128)
++#else
+ #define SLEEF_QUAD_C(x) (x ## Q)
++#endif
+ #elif defined(SLEEF_LONGDOUBLE_IS_IEEEQP)
+ typedef long double Sleef_quad;
+ #define SLEEF_QUAD_C(x) (x ## L)
+diff --git a/src/libm/sleefqp.c b/src/libm/sleefqp.c
+index 81d705b7a..e10f72db8 100644
+--- a/src/libm/sleefqp.c
++++ b/src/libm/sleefqp.c
+@@ -338,38 +338,38 @@ EXPORT CONST Sleef_quad2 xsincospiq_u05(Sleef_quad d) {
+   
+   //
+ 
+-  u = +0.1528321016188828732764080161368244291e-27Q;
+-  u = mlaq(u, s, -0.1494741498689376415859233754050616110e-24Q);
+-  u = mlaq(u, s, +0.1226149947504428931621181953791777769e-21Q);
+-  u = mlaq(u, s, -0.8348589834426964519785265770009675533e-19Q);
+-  u = mlaq(u, s, +0.4628704628834415551415078707261146069e-16Q);
+-  u = mlaq(u, s, -0.2041026339664143925641158896030605061e-13Q);
+-  u = mlaq(u, s, +0.6948453273886629408492386065037620114e-11Q);
+-  u = mlaq(u, s, -0.1757247673443401045145682042627557066e-8Q);
+-  u = mlaq(u, s, +0.3133616890378121520950407496603902388e-6Q);
+-  u = mlaq(u, s, -0.3657620418217725078660518698299784909e-4Q);
+-  u = mlaq(u, s, +0.2490394570192720160015798421577395304e-2Q);
+-  x = dqadd2_q2_q_q2(u * s, dq(-0.08074551218828078170696957048724322192457Q, 5.959584458773288360696286320980429277618e-36));
+-  x = dqadd2_q2_q2_q2(dqmul_q2_q2_q2(s2, x), dq(0.7853981633974483096156608458198756993698Q, 2.167745574452451779709844565881105067311e-35Q));
++  u = SLEEF_QUAD_C(+0.1528321016188828732764080161368244291e-27);
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.1494741498689376415859233754050616110e-24));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1226149947504428931621181953791777769e-21));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.8348589834426964519785265770009675533e-19));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.4628704628834415551415078707261146069e-16));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2041026339664143925641158896030605061e-13));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.6948453273886629408492386065037620114e-11));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.1757247673443401045145682042627557066e-8));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3133616890378121520950407496603902388e-6));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3657620418217725078660518698299784909e-4));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.2490394570192720160015798421577395304e-2));
++  x = dqadd2_q2_q_q2(u * s, dq(SLEEF_QUAD_C(-0.08074551218828078170696957048724322192457), 5.959584458773288360696286320980429277618e-36));
++  x = dqadd2_q2_q2_q2(dqmul_q2_q2_q2(s2, x), dq(SLEEF_QUAD_C(0.7853981633974483096156608458198756993698), SLEEF_QUAD_C(2.167745574452451779709844565881105067311e-35)));
+ 
+   x = dqmul_q2_q2_q(x, t);
+   r.x = x.x + x.y;
+   
+   //
+ 
+-  u = -0.4616472554003168470361503708527464705e-29Q;
+-  u = mlaq(u, s, +0.4891528531228245577148587028696897180e-26Q);
+-  u = mlaq(u, s, -0.4377345071482935585011339656701961637e-23Q);
+-  u = mlaq(u, s, +0.3278483561449753435303463083506802784e-20Q);
+-  u = mlaq(u, s, -0.2019653396886554861865456720993185772e-17Q);
+-  u = mlaq(u, s, +0.1001886461636271957275884859852184250e-14Q);
+-  u = mlaq(u, s, -0.3898073171259675439843028673969857173e-12Q);
+-  u = mlaq(u, s, +0.1150115912797405152263176921581706121e-9Q);
+-  u = mlaq(u, s, -0.2461136950494199754009084018126527316e-7Q);
+-  u = mlaq(u, s, +0.3590860448591510079069203991167071234e-5Q);
+-  u = mlaq(u, s, -0.3259918869273900136414318317506198622e-3Q);
+-  x = dqadd2_q2_q_q2(u * s, dq(0.01585434424381550085228521039855226376329Q, 6.529088663284413499535484912972485728198e-38Q));
+-  x = dqadd2_q2_q2_q2(dqmul_q2_q2_q2(s2, x), dq(-0.308425137534042456838577843746129712906Q, -1.006808646313642786855469666154064243572e-35Q));
++  u = SLEEF_QUAD_C(-0.4616472554003168470361503708527464705e-29);
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.4891528531228245577148587028696897180e-26));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.4377345071482935585011339656701961637e-23));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3278483561449753435303463083506802784e-20));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2019653396886554861865456720993185772e-17));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1001886461636271957275884859852184250e-14));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3898073171259675439843028673969857173e-12));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1150115912797405152263176921581706121e-9));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2461136950494199754009084018126527316e-7));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3590860448591510079069203991167071234e-5));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3259918869273900136414318317506198622e-3));
++  x = dqadd2_q2_q_q2(u * s, dq(SLEEF_QUAD_C(0.01585434424381550085228521039855226376329), SLEEF_QUAD_C(6.529088663284413499535484912972485728198e-38)));
++  x = dqadd2_q2_q2_q2(dqmul_q2_q2_q2(s2, x), dq(SLEEF_QUAD_C(-0.308425137534042456838577843746129712906), SLEEF_QUAD_C(-1.006808646313642786855469666154064243572e-35)));
+   
+   x = dqadd2_q2_q2_q(dqmul_q2_q2_q2(x, s2), 1);
+   r.y = x.x + x.y;
+@@ -399,36 +399,36 @@ EXPORT CONST Sleef_quad2 xsincospiq_u35(Sleef_quad d) {
+   
+   //
+ 
+-  u = -0.1485963032785725729464918728185622156e-24Q;
+-  u = mlaq(u, s, +0.1226127943866088943202201676879490635e-21Q);
+-  u = mlaq(u, s, -0.8348589518463078609690110857435995326e-19Q);
+-  u = mlaq(u, s, +0.4628704628547538824855302470312741438e-16Q);
+-  u = mlaq(u, s, -0.2041026339663972432248777826778586936e-13Q);
+-  u = mlaq(u, s, +0.6948453273886628726907826757576187848e-11Q);
+-  u = mlaq(u, s, -0.1757247673443401044967978719804318982e-8Q);
+-  u = mlaq(u, s, +0.3133616890378121520950114757196589206e-6Q);
+-  u = mlaq(u, s, -0.3657620418217725078660518414453815240e-4Q);
+-  u = mlaq(u, s, +0.2490394570192720160015798421435124000e-2Q);
+-  u = mlaq(u, s, -0.8074551218828078170696957048724041729e-1Q);
+-  u = mlaq(u, s, +0.7853981633974483096156608458198756994e+0Q);
++  u = SLEEF_QUAD_C(-0.1485963032785725729464918728185622156e-24);
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1226127943866088943202201676879490635e-21));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.8348589518463078609690110857435995326e-19));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.4628704628547538824855302470312741438e-16));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2041026339663972432248777826778586936e-13));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.6948453273886628726907826757576187848e-11));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.1757247673443401044967978719804318982e-8));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3133616890378121520950114757196589206e-6));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3657620418217725078660518414453815240e-4));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.2490394570192720160015798421435124000e-2));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.8074551218828078170696957048724041729e-1));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.7853981633974483096156608458198756994e+0));
+   
+   r.x = u * t;
+ 
+   //
+ 
+-  u = +0.4862670988511544771355006256522366302e-26Q;
+-  u = mlaq(u, s, -0.4377265452147065611484052550741141029e-23Q);
+-  u = mlaq(u, s, +0.3278483433857326331665386021267750285e-20Q);
+-  u = mlaq(u, s, -0.2019653396755055912482006994709659430e-17Q);
+-  u = mlaq(u, s, +0.1001886461636180795663169552615123249e-14Q);
+-  u = mlaq(u, s, -0.3898073171259675007871885150022866077e-12Q);
+-  u = mlaq(u, s, +0.1150115912797405152123832255915284811e-9Q);
+-  u = mlaq(u, s, -0.2461136950494199754008784937314856168e-7Q);
+-  u = mlaq(u, s, +0.3590860448591510079069203583263258862e-5Q);
+-  u = mlaq(u, s, -0.3259918869273900136414318317180623832e-3Q);
+-  u = mlaq(u, s, +0.1585434424381550085228521039855096075e-1Q);
+-  u = mlaq(u, s, -0.3084251375340424568385778437461297129e+0Q);
+-  u = mlaq(u, s, 1.0Q);
++  u = SLEEF_QUAD_C(+0.4862670988511544771355006256522366302e-26);
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.4377265452147065611484052550741141029e-23));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3278483433857326331665386021267750285e-20));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2019653396755055912482006994709659430e-17));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1001886461636180795663169552615123249e-14));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3898073171259675007871885150022866077e-12));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1150115912797405152123832255915284811e-9));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.2461136950494199754008784937314856168e-7));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.3590860448591510079069203583263258862e-5));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3259918869273900136414318317180623832e-3));
++  u = mlaq(u, s, SLEEF_QUAD_C(+0.1585434424381550085228521039855096075e-1));
++  u = mlaq(u, s, SLEEF_QUAD_C(-0.3084251375340424568385778437461297129e+0));
++  u = mlaq(u, s, SLEEF_QUAD_C(1.0));
+ 
+   r.y = u;
+ 
+@@ -450,21 +450,21 @@ EXPORT CONST Sleef_quad2 xsincospiq_u35(Sleef_quad d) {
+ #include <stdio.h>
+ #include <stdlib.h>
+ int main(int argc, char **argv) {
+-  Sleef_quad a = -8.3998726984803832684266802333309369056312711821029e-09Q;
++  Sleef_quad a = SLEEF_QUAD_C(-8.3998726984803832684266802333309369056312711821029e-09);
+   Sleef_quad2 q = xsincospiq_u05(a);
+   printf("    "); printf128(q.x); printf("\n");
+ 
+   /*
+-  printf128(0.1Q); printf("\n");
+-  Sleef_quad2 q2 = dqmul_q2_q_q(0.1Q, 0.1Q);
++  printf128(SLEEF_QUAD_C(0.1)); printf("\n");
++  Sleef_quad2 q2 = dqmul_q2_q_q(SLEEF_QUAD_C(0.1), SLEEF_QUAD_C(0.1));
+   printf128(q2.x); printf("\n");
+   printf128(q2.y); printf("\n");
+   */
+   /*
+-  printf("%s\n", toBCq(0.1Q));
+-  printf("%s\n", toBCq(upperq(0.1Q)));
+-  printf("%s\n", toBCq(0.1Q-upperq(0.1Q)));
+-  Sleef_quad2 q2 = dqmul_q2_q_q(0.1Q, 0.1Q);
++  printf("%s\n", toBCq(SLEEF_QUAD_C(0.1)));
++  printf("%s\n", toBCq(upperq(SLEEF_QUAD_C(0.1))));
++  printf("%s\n", toBCq(SLEEF_QUAD_C(0.1)-upperq(SLEEF_QUAD_C(0.1))));
++  Sleef_quad2 q2 = dqmul_q2_q_q(SLEEF_QUAD_C(0.1), SLEEF_QUAD_C(0.1));
+   printf("%s + ", toBCq(q2.x));
+   printf("%s\n", toBCq(q2.y));
+   */
+diff --git a/src/libm/sleefsimddp.c b/src/libm/sleefsimddp.c
+index 8186ff321..9a7a4f1ce 100644
+--- a/src/libm/sleefsimddp.c
++++ b/src/libm/sleefsimddp.c
+@@ -155,6 +155,24 @@ extern const double Sleef_rempitabdp[];
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
++// LoongArch
++
++#ifdef ENABLE_LSX
++#define CONFIG 1
++#include "helperlsx.h"
++#ifdef DORENAME
++#include "renamelsx.h"
++#endif
++#endif
++
++#ifdef ENABLE_LASX
++#define CONFIG 1
++#include "helperlasx.h"
++#ifdef DORENAME
++#include "renamelasx.h"
++#endif
++#endif
++
+ // IBM
+ 
+ #ifdef ENABLE_VSX
+diff --git a/src/libm/sleefsimdsp.c b/src/libm/sleefsimdsp.c
+index 27a33f989..7e1410bc8 100644
+--- a/src/libm/sleefsimdsp.c
++++ b/src/libm/sleefsimdsp.c
+@@ -223,6 +223,32 @@ extern const float Sleef_rempitabsp[];
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
++// LoongArch
++
++#ifdef ENABLE_LSX
++#define CONFIG 1
++#if !defined(SLEEF_GENHEADER)
++#include "helperlsx.h"
++#else
++#include "macroonlyLSX.h"
++#endif
++#ifdef DORENAME
++#include "renamelsx.h"
++#endif
++#endif
++
++#ifdef ENABLE_LASX
++#define CONFIG 1
++#if !defined(SLEEF_GENHEADER)
++#include "helperlasx.h"
++#else
++#include "macroonlyLASX.h"
++#endif
++#ifdef DORENAME
++#include "renamelasx.h"
++#endif
++#endif
++
+ // IBM
+ 
+ #ifdef ENABLE_VSX
+@@ -1173,8 +1199,8 @@ EXPORT CONST VECTOR_CC vfloat xfastsinf_u3500(vfloat d) {
+   vfloat u, s, t = d;
+ 
+   s = vmul_vf_vf_vf(d, vcast_vf_f((float)M_1_PI));
+-  u = vrint_vf_vf(s);
+   q = vrint_vi2_vf(s);
++  u = vcast_vf_vi2(q);
+   d = vmla_vf_vf_vf_vf(u, vcast_vf_f(-(float)M_PI), d);
+ 
+   s = vmul_vf_vf_vf(d, d);
+@@ -1197,8 +1223,8 @@ EXPORT CONST VECTOR_CC vfloat xfastcosf_u3500(vfloat d) {
+   vfloat u, s, t = d;
+ 
+   s = vmla_vf_vf_vf_vf(d, vcast_vf_f((float)M_1_PI), vcast_vf_f(-0.5f));
+-  u = vrint_vf_vf(s);
+   q = vrint_vi2_vf(s);
++  u = vcast_vf_vi2(q);
+   d = vmla_vf_vf_vf_vf(u, vcast_vf_f(-(float)M_PI), vsub_vf_vf_vf(d, vcast_vf_f((float)M_PI * 0.5f)));
+ 
+   s = vmul_vf_vf_vf(d, d);
 diff --git a/src/quad/CMakeLists.txt b/src/quad/CMakeLists.txt
-index 4d9700d..1e24dfd 100644
+index 4d9700d58..d23f3cdf8 100644
 --- a/src/quad/CMakeLists.txt
 +++ b/src/quad/CMakeLists.txt
-@@ -93,6 +93,12 @@ elseif(SLEEF_ARCH_RISCV64)
+@@ -65,6 +65,12 @@ elseif(SLEEF_ARCH_AARCH32)
      PURECFMA_SCALAR
      DSPSCALAR
      )
@@ -95,20 +2811,23 @@ index 4d9700d..1e24dfd 100644
 +    PUREC_SCALAR
 +    PURECFMA_SCALAR
 +    DSPSCALAR
-+    )
- endif()
- 
- #
++  )
+ elseif(SLEEF_ARCH_PPC64)
+   set(SLEEF_HEADER_LIST
+     VSX
 diff --git a/src/quad/sleefquad_header.h.org.in b/src/quad/sleefquad_header.h.org.in
-index 05b5e12..09d2abc 100644
+index 05b5e1216..458c13626 100644
 --- a/src/quad/sleefquad_header.h.org.in
 +++ b/src/quad/sleefquad_header.h.org.in
-@@ -47,7 +47,7 @@ extern "C"
- #define SLEEF_FLOAT128_IS_IEEEQP
- #endif
- 
--#if !defined(SLEEF_FLOAT128_IS_IEEEQP) && defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ == 16 && (defined(__aarch64__) || defined(__zarch__))
-+#if !defined(SLEEF_FLOAT128_IS_IEEEQP) && defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ == 16 && (defined(__aarch64__) || defined(__zarch__) || defined(__loongarch64))
- #define SLEEF_LONGDOUBLE_IS_IEEEQP
- #endif
- 
+@@ -56,7 +56,11 @@ extern "C"
+ typedef struct { uint64_t x, y; } Sleef_uint64_2t;
+ #if defined(SLEEF_FLOAT128_IS_IEEEQP)
+ typedef __float128 Sleef_quad;
++#if defined(__loongarch__)
++#define SLEEF_QUAD_C(x) (x ## f128)
++#else
+ #define SLEEF_QUAD_C(x) (x ## Q)
++#endif
+ #elif defined(SLEEF_LONGDOUBLE_IS_IEEEQP)
+ typedef long double Sleef_quad;
+ #define SLEEF_QUAD_C(x) (x ## L)
