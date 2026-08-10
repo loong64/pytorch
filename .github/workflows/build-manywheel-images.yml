@@ -55,8 +55,8 @@ jobs:
           platforms: linux/loong64
           push: true
           target: final
-          build-args: |
-            RUNNER_ARCH
+          # build-args: |
+            # RUNNER_ARCH
           tags: |
             ghcr.io/loong64/manylinuxloongarch64-builder:${{ matrix.tag }}
           cache-from: type=registry,ref=ghcr.io/loong64/manylinuxloongarch64-builder:buildcache

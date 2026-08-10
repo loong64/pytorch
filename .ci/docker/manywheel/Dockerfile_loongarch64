@@ -46,8 +46,8 @@ RUN yum install -y \
   yum clean all
 
 # Clang
-ARG RUNNER_ARCH
-RUN [ -n "${RUNNER_ARCH}" ] && manylinux-install-clang
+# ARG RUNNER_ARCH
+# RUN [ -n "${RUNNER_ARCH}" ] && manylinux-install-clang
 
 # git236+ would refuse to run git commands in repos owned by other users
 # Which causes version check to fail, as pytorch repo is bind-mounted into the image
