@@ -56,26 +56,6 @@ index cd20c07..ba9aac5 100644
      else
          # zip up the wheel back
          zip -rq $(basename $pkg) $PREIX*
-diff --git a/.ci/manywheel/build_cpu.sh b/.ci/manywheel/build_cpu.sh
-index 070b2ce..d5d4fad 100755
---- a/.ci/manywheel/build_cpu.sh
-+++ b/.ci/manywheel/build_cpu.sh
-@@ -48,6 +48,15 @@ DEPS_SONAME=(
-     "libgomp.so.1"
- )
- 
-+if [[ "$ARCH" == "loongarch64" ]]; then
-+    DEPS_LIST+=(
-+        "/usr/lib64/libopenblas.so.0"
-+    )
-+    DEPS_SONAME+=(
-+        "libopenblas.so.0"
-+    )
-+fi
-+
- rm -rf /usr/local/cuda*
- 
- SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 diff --git a/.ci/manywheel/build_env_setup.py b/.ci/manywheel/build_env_setup.py
 index a72b7e4..3944deb 100755
 --- a/.ci/manywheel/build_env_setup.py
@@ -106,8 +86,26 @@ index a72b7e4..3944deb 100755
          cleanup_cuda_for_cpu_build()
          env_out.update(CPU_BUILD_ENV)
          print("CPU environment configured")
+diff --git a/.ci/manywheel/build_wheel.py b/.ci/manywheel/build_wheel.py
+index 4b33397..510e73d 100755
+--- a/.ci/manywheel/build_wheel.py
++++ b/.ci/manywheel/build_wheel.py
+@@ -58,6 +58,13 @@ def configure_blas_env() -> None:
+         print("Using OpenBLAS and ACL for MKLDNN on CPU aarch64")
+         os.environ["BLAS"] = "OpenBLAS"
+         os.environ["OpenBLAS_HOME"] = "/opt/OpenBLAS"
++    elif gpu_arch_type in ("cpu-loongarch64", "cpu"):
++        openblas = Path("/opt/OpenBLAS/lib/libopenblas.so.0")
++        if not openblas.is_file():
++            sys.exit(f"ERROR: OpenBLAS not found at {openblas}")
++        print("Using OpenBLAS on CPU loongarch64")
++        os.environ["BLAS"] = "OpenBLAS"
++        os.environ["OpenBLAS_HOME"] = "/opt/OpenBLAS"
+ 
+ 
+ def main() -> None:
 diff --git a/.ci/manywheel/repair_wheel.py b/.ci/manywheel/repair_wheel.py
-index ae964c5..e3a3cdb 100755
+index ae964c5..06f46e6 100755
 --- a/.ci/manywheel/repair_wheel.py
 +++ b/.ci/manywheel/repair_wheel.py
 @@ -114,6 +114,29 @@ def aarch64_extra_deps(use_cuda: bool) -> list[Path]:
@@ -132,7 +130,7 @@ index ae964c5..e3a3cdb 100755
 +            )
 +        ]
 +    else:
-+        candidates.append(Path("/usr/lib64/libopenblas.so.0"))
++        candidates.append(Path("/opt/OpenBLAS/lib/libopenblas.so.0"))
 +    deps = [p for p in candidates if p.is_file()]
 +    return deps
 +

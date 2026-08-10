@@ -32,16 +32,6 @@ RUN yum install -y \
   yasm \
   zstd \
   sudo \
-  blas-devel \
-  openblas-devel \
-  lapack-devel \
-  atlas-devel \
-  libjpeg-devel \
-  libxslt-devel \
-  libxml2-devel \
-  openssl-devel \
-  valgrind \
-  ninja-build \
   && \
   yum clean all
 
@@ -55,5 +45,14 @@ RUN yum install -y \
 # For more details see https://github.com/pytorch/pytorch/issues/78659#issuecomment-1144107327
 RUN git config --global --add safe.directory "*"
 
+FROM base AS openblas
+# Install openblas
+# ARG OPENBLAS_VERSION
+ADD ./common/install_openblas.sh install_openblas.sh
+RUN bash ./install_openblas.sh && rm install_openblas.sh
+
 FROM base AS final
+COPY --from=openblas     /opt/OpenBLAS/  /opt/OpenBLAS/
+ENV LD_LIBRARY_PATH=/opt/OpenBLAS/lib:$LD_LIBRARY_PATH
+
 ADD repair_manylinux_2_38.sh /usr/local/bin/repair_manylinux_2_38.sh

@@ -65,7 +65,7 @@ jobs:
     if: needs.check.outputs.create == '1'
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: pytorch/pytorch
           ref: ${{ needs.check.outputs.version }}
