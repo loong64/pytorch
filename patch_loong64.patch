@@ -12,7 +12,7 @@ index 2f4abd2..06aaf77 100755
          # then patchelf-based wheel repair.
          source "${SCRIPTPATH}/set_desired_python.sh"
 diff --git a/.ci/manywheel/build_common.sh b/.ci/manywheel/build_common.sh
-index cd20c07..ba9aac5 100644
+index 02bb2d7..91e8274 100644
 --- a/.ci/manywheel/build_common.sh
 +++ b/.ci/manywheel/build_common.sh
 @@ -41,6 +41,9 @@ if [[ "$OS_NAME" == *"AlmaLinux"* ]]; then
@@ -31,9 +31,9 @@ index cd20c07..ba9aac5 100644
  pushd "$PYTORCH_ROOT"
 +retry pip install -U pip
  retry pip install -qUr requirements-build.txt
- python setup.py clean
+ python -m spin clean
  retry pip install -qr requirements.txt
-@@ -382,6 +386,10 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
+@@ -376,6 +380,10 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
          wheel_file=$(echo $(basename $pkg) | sed -e 's/-cp.*$/.dist-info\/WHEEL/g')
          sed -i -e s#linux_aarch64#"${PLATFORM}"# $wheel_file;
      fi
@@ -44,7 +44,7 @@ index cd20c07..ba9aac5 100644
  
      # regenerate the RECORD file with new hashes
      record_file=$(echo $(basename $pkg) | sed -e 's/-cp.*$/.dist-info\/RECORD/g')
-@@ -434,6 +442,11 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
+@@ -428,6 +436,11 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
          zip -rq $pkg_name $PREIX*
          rm -f $pkg
          mv $pkg_name $(dirname $pkg)/$pkg_name
@@ -57,10 +57,10 @@ index cd20c07..ba9aac5 100644
          # zip up the wheel back
          zip -rq $(basename $pkg) $PREIX*
 diff --git a/.ci/manywheel/build_env_setup.py b/.ci/manywheel/build_env_setup.py
-index a72b7e4..3944deb 100755
+index 776fde3..bcb869a 100755
 --- a/.ci/manywheel/build_env_setup.py
 +++ b/.ci/manywheel/build_env_setup.py
-@@ -186,6 +186,7 @@ ROCM_BUILD_ENV_STATIC: dict[str, str] = {
+@@ -227,6 +227,7 @@ def discover_rocm_home() -> str:
  PLATFORM_TAGS: dict[str, str] = {
      "x86_64": "manylinux_2_28_x86_64",
      "aarch64": "manylinux_2_28_aarch64",
@@ -68,7 +68,7 @@ index a72b7e4..3944deb 100755
  }
  
  
-@@ -210,7 +211,7 @@ def install_os_packages() -> None:
+@@ -251,7 +252,7 @@ def install_os_packages() -> None:
      # (.ci/docker/manywheel/Dockerfile_2_28). Only zip + openssl are not,
      # matching the legacy build_common.sh contract.
      name = os_name()
@@ -77,7 +77,7 @@ index a72b7e4..3944deb 100755
          subprocess.run(
              ["yum", "install", "-q", "-y", "zip", "openssl"],
              check=True,
-@@ -453,7 +454,7 @@ def main() -> None:
+@@ -494,7 +495,7 @@ def main() -> None:
          setup_cuda(cuda_version)
          env_out.update(cuda_build_env(cuda_version, arch))
          print(f"CUDA {cuda_version} environment configured")
@@ -105,10 +105,10 @@ index 4b33397..510e73d 100755
  
  def main() -> None:
 diff --git a/.ci/manywheel/repair_wheel.py b/.ci/manywheel/repair_wheel.py
-index ae964c5..06f46e6 100755
+index 5cc1122..329684e 100755
 --- a/.ci/manywheel/repair_wheel.py
 +++ b/.ci/manywheel/repair_wheel.py
-@@ -114,6 +114,29 @@ def aarch64_extra_deps(use_cuda: bool) -> list[Path]:
+@@ -145,6 +145,29 @@ def aarch64_extra_deps(use_cuda: bool) -> list[Path]:
      return deps
  
  
@@ -138,7 +138,7 @@ index ae964c5..06f46e6 100755
  # ROCm shared libs to bundle. Discovered under $ROCM_HOME/{lib,lib64}.
  ROCM_SO_FILES: list[str] = [
      "libMIOpen.so",
-@@ -400,6 +423,9 @@ def main() -> None:
+@@ -488,20 +511,24 @@ def main() -> None:
          force_rpath = False
  
      aarch64_deps = aarch64_extra_deps(use_cuda) if arch == "aarch64" else []
@@ -148,43 +148,50 @@ index ae964c5..06f46e6 100755
  
      args.output_dir.mkdir(parents=True, exist_ok=True)
      wheels = sorted(args.input_dir.glob("*.whl"))
-@@ -411,7 +437,7 @@ def main() -> None:
+     if not wheels:
+         sys.exit(f"No wheels found in {args.input_dir}")
+ 
+-    platform_tag = f"manylinux_2_28_{arch}"
++    manylinux_version = os.environ.get("AUDITWHEEL_POLICY", "manylinux_2_28")
++    platform_tag = f"{manylinux_version}_{arch}"
+     for whl in wheels:
+         repair_wheel(
              whl,
              args.output_dir,
+             platform_tag,
              libgomp_path,
 -            aarch64_deps,
 +            arch_deps,
              bundled_libs,
              aux_files,
              c_so_rpath,
-@@ -419,7 +445,8 @@ def main() -> None:
-             force_rpath,
-         )
- 
--    retag_wheels(args.output_dir, f"manylinux_2_28_{arch}")
-+    manylinux_version = os.environ.get("AUDITWHEEL_POLICY", "manylinux_2_28")
-+    retag_wheels(args.output_dir, f"{manylinux_version}_{arch}")
-     repaired = list(args.output_dir.glob("*.whl"))
-     print(f"Repaired {len(repaired)} wheel(s) in {args.output_dir}")
- 
 diff --git a/.ci/pytorch/build.sh b/.ci/pytorch/build.sh
-index 855ad14..9ac66b7 100755
+index 87e8cc6..dfa2efc 100755
 --- a/.ci/pytorch/build.sh
 +++ b/.ci/pytorch/build.sh
-@@ -232,7 +232,7 @@ fi
+@@ -242,7 +242,7 @@ fi
  
  # Do not change workspace permissions for ROCm and s390x CI jobs
  # as it can leave workspace with bad permissions for cancelled jobs
--if [[ "$BUILD_ENVIRONMENT" != *rocm* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* && -d /var/lib/jenkins/workspace ]]; then
-+if [[ "$BUILD_ENVIRONMENT" != *rocm* && "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* && -d /var/lib/jenkins/workspace ]]; then
+-if [[ "$BUILD_ENVIRONMENT" != *rocm* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64*cross* && -d /var/lib/jenkins/workspace ]]; then
++if [[ "$BUILD_ENVIRONMENT" != *rocm* && "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64*cross* && -d /var/lib/jenkins/workspace ]]; then
    # Workaround for dind-rootless userid mapping (https://github.com/pytorch/ci-infra/issues/96)
    WORKSPACE_ORIGINAL_OWNER_ID=$(stat -c '%u' "/var/lib/jenkins/workspace")
    cleanup_workspace() {
-@@ -439,6 +439,6 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* ]]; then
+@@ -266,7 +266,7 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* ]]; then
+   # Release xpu build stress with WERROR=1
+   # set only when building other architectures
+   # or building non-XLA tests.
+-  if [[ "$BUILD_ENVIRONMENT" != *rocm*  && "$BUILD_ENVIRONMENT" != *xla* && "$BUILD_ENVIRONMENT" != *riscv64*  && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *xpu* ]]; then
++  if [[ "$BUILD_ENVIRONMENT" != *rocm*  && "$BUILD_ENVIRONMENT" != *xla* && "$BUILD_ENVIRONMENT" != *riscv64* && "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *xpu* ]]; then
+     # TODO: Remove me and may be just focus on numpy-2.x testing
+     if [[ "$PYTHON_VERSION" =~ ^3\.1[0-2]$ ]]; then
+       # Install numpy-2.0.2 for builds which are backward compatible with 1.X
+@@ -423,6 +423,6 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* ]]; then
    PYTHONPATH=. python tools/stats/export_test_times.py
  fi
  # don't do this for s390x or riscv64 as they don't use sccache
--if [[ "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* ]]; then
-+if [[ "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64* ]]; then
+-if [[ "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64*cross* ]]; then
++if [[ "$BUILD_ENVIRONMENT" != *loongarch64* && "$BUILD_ENVIRONMENT" != *s390x* && "$BUILD_ENVIRONMENT" != *riscv64*cross* ]]; then
    print_sccache_stats
  fi
