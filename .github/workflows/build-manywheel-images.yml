@@ -1,6 +1,7 @@
 name: Build manywheel docker images
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches:
@@ -34,6 +35,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Check version
+        id: get_version
+        run: |
+          version=$(curl --retry 10 -s "https://api.github.com/repos/pytorch/pytorch/releases/latest" | jq -r .tag_name)
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+          echo "latest_tag=${version}" >> $GITHUB_ENV
+
+          cd .ci/docker/common
+          rm -f install_openblas.sh
+          wget -q https://github.com/pytorch/pytorch/raw/refs/tags/${version}/.ci/docker/common/install_openblas.sh
+          sed -i 's/TARGET=\${OPENBLAS_TARGET:-}/TARGET=${OPENBLAS_TARGET:-GENERIC}/' install_openblas.sh
+          chmod +x install_openblas.sh
+
+          cat install_openblas.sh
+        shell: bash
+
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -59,5 +79,6 @@ jobs:
             # RUNNER_ARCH
           tags: |
             ghcr.io/loong64/manylinuxloongarch64-builder:${{ matrix.tag }}
+            ghcr.io/loong64/manylinuxloongarch64-builder:${{ env.latest_tag }}
           cache-from: type=registry,ref=ghcr.io/loong64/manylinuxloongarch64-builder:buildcache
           cache-to: type=registry,ref=ghcr.io/loong64/manylinuxloongarch64-builder:buildcache,mode=max,compression=zstd,compression-level=22
