@@ -12,7 +12,7 @@ index 2f4abd2..06aaf77 100755
          # then patchelf-based wheel repair.
          source "${SCRIPTPATH}/set_desired_python.sh"
 diff --git a/.ci/manywheel/build_common.sh b/.ci/manywheel/build_common.sh
-index 02bb2d7..91e8274 100644
+index 02bb2d7..3768010 100644
 --- a/.ci/manywheel/build_common.sh
 +++ b/.ci/manywheel/build_common.sh
 @@ -41,6 +41,9 @@ if [[ "$OS_NAME" == *"AlmaLinux"* ]]; then
@@ -25,15 +25,7 @@ index 02bb2d7..91e8274 100644
          *)
              echo "Other architectures: $ARCH, not setting PLATFORM"
              ;;
-@@ -115,6 +118,7 @@ if [[ -z "$PYTORCH_ROOT" ]]; then
-     exit 1
- fi
- pushd "$PYTORCH_ROOT"
-+retry pip install -U pip
- retry pip install -qUr requirements-build.txt
- python -m spin clean
- retry pip install -qr requirements.txt
-@@ -376,6 +380,10 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
+@@ -376,6 +379,10 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
          wheel_file=$(echo $(basename $pkg) | sed -e 's/-cp.*$/.dist-info\/WHEEL/g')
          sed -i -e s#linux_aarch64#"${PLATFORM}"# $wheel_file;
      fi
@@ -44,7 +36,7 @@ index 02bb2d7..91e8274 100644
  
      # regenerate the RECORD file with new hashes
      record_file=$(echo $(basename $pkg) | sed -e 's/-cp.*$/.dist-info\/RECORD/g')
-@@ -428,6 +436,11 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
+@@ -428,6 +435,11 @@ for pkg in /$WHEELHOUSE_DIR/torch_no_python*.whl /$WHEELHOUSE_DIR/torch*linux*.w
          zip -rq $pkg_name $PREIX*
          rm -f $pkg
          mv $pkg_name $(dirname $pkg)/$pkg_name
