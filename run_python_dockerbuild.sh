@@ -42,10 +42,10 @@ export PYTORCH_BUILD_VERSION=${PYTORCH_VERSION/v/}
 
 export PYTORCH_ROOT=/pytorch
 export DOCKER_IMAGE=ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64
-export DESIRED_PYTHONS="3.10 3.11 3.12 3.13 3.14 3.14t"
+export DESIRED_PYTHONS="3.11 3.12 3.13 3.14 3.14t 3.15 3.15t"
 export PYTORCH_FINAL_PACKAGE_DIR=/artifacts
 
-export DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build_all.sh"
+export DOCKER_CMD="${PYTORCH_ROOT}/.ci/wheel/linux/build_all.sh"
 docker run --rm \
   --platform linux/loong64 \
   --env PYTORCH_ROOT \

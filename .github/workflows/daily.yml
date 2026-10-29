@@ -97,7 +97,7 @@ jobs:
           echo "PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple" >> $GITHUB_ENV
 
           mkdir -p wheelhouse
-          chmod +x .ci/manywheel/build.sh
+          chmod +x .ci/wheel/linux/build_all.sh
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
@@ -111,11 +111,11 @@ jobs:
           DESIRED_CUDA: cpu
           GPU_ARCH_TYPE: cpu-loongarch64
           DOCKER_IMAGE: ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64
-          DESIRED_PYTHONS: "3.10 3.11 3.12 3.13 3.14 3.14t"
+          DESIRED_PYTHONS: "3.11 3.12 3.13 3.14 3.14t 315 315t"
           BUILD_NAME_PREFIX: manywheel-py
           BUILD_NAME_SUFFIX: -cpu-loongarch64
         run: |
-          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build_all.sh"
+          DOCKER_CMD="${PYTORCH_ROOT}/.ci/wheel/linux/build_all.sh"
           docker run --rm \
             --platform linux/loong64 \
             --env PYTORCH_ROOT \
